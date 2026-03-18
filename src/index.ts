@@ -15,6 +15,22 @@ import analyticsRoutes from './routes/analytics.js'
 
 dotenv.config()
 
+// Fail fast on startup if required env vars are missing
+const REQUIRED_ENV = [
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_KEY',
+  'SUPABASE_JWT_SECRET',
+  'R2_ACCOUNT_ID',
+  'R2_BUCKET_NAME',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+]
+const missing = REQUIRED_ENV.filter(k => !process.env[k])
+if (missing.length) {
+  console.error(`Missing required environment variables: ${missing.join(', ')}`)
+  process.exit(1)
+}
+
 const fastify = Fastify({
   logger: true
 })
@@ -29,7 +45,7 @@ fastify.register(cors, {
 
 // Supabase uses JWT for auth. We verify it using the Supabase JWT secret.
 fastify.register(jwt, {
-  secret: process.env.SUPABASE_JWT_SECRET || 'fallback-secret-for-dev-only'
+  secret: process.env.SUPABASE_JWT_SECRET!
 })
 
 fastify.register(authPlugin)

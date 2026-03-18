@@ -110,22 +110,21 @@ export default async function (fastify: FastifyInstance) {
 
     const event = request.body as any
 
-    // Always return 200 to acknowledge receipt to Paystack
+    // Always return 200 immediately to acknowledge receipt to Paystack
     reply.code(200).send()
 
-    // 2. Process Event
+    // 2. Process Event asynchronously after ack
     const eventType = event.event
-    const { metadata, reference } = event.data
-    const userId = metadata?.user_id
-    const planId = metadata?.plan_id
-    const billingCycle = metadata?.billing_cycle
-
-    if (!userId && (eventType === 'charge.success' || eventType === 'subscription.create')) {
-      fastify.log.error('Webhook missing metadata', event.data)
-      return
-    }
+    const { metadata, reference } = event.data ?? {}
+    const userId: string | undefined = metadata?.user_id
+    const planId: string | undefined = metadata?.plan_id
+    const billingCycle: string | undefined = metadata?.billing_cycle
 
     if (eventType === 'charge.success' || eventType === 'subscription.create') {
+      if (!userId || !planId || !billingCycle) {
+        fastify.log.error('Webhook missing required metadata', event.data)
+        return
+      }
       // Upsert Subscription
       const currentPeriodStart = new Date()
       const currentPeriodEnd = new Date()
@@ -165,10 +164,11 @@ export default async function (fastify: FastifyInstance) {
         .eq('user_id', userId)
         .single()
 
-      if (sub && sub.status === 'active') {
+      if (sub && (sub.status === 'active' || sub.status === 'trialing')) {
+        if (!userId) { fastify.log.error('Webhook missing user_id for disable event'); return }
         await fastify.supabase
           .from('subscriptions')
-          .update({ status: 'grace_period', updated_at: new Date().toISOString() })
+          .update({ status: 'past_due', updated_at: new Date().toISOString() })
           .eq('user_id', userId)
       }
     }
