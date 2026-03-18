@@ -135,13 +135,12 @@ export default async function (fastify: FastifyInstance) {
 
     if (isPublishing) {
       // 2. Subscription Status Check
-      const { plan, subscription } = await checkUserQuota(fastify, userId)
-      const activeStatuses = ['active', 'trialing', 'trial']
-      
-      if (!subscription || !activeStatuses.includes(subscription.status)) {
-        if (subscription?.status === 'grace_period') {
-          return reply.code(403).send({ statusMessage: 'New publishing is disabled during grace period. Please renew your subscription.' })
-        }
+      const { plan, canWrite, isGrace } = await checkUserQuota(fastify, userId)
+
+      if (isGrace) {
+        return reply.code(403).send({ statusMessage: 'Publishing new properties is disabled during the grace period. Please renew your subscription.' })
+      }
+      if (!canWrite) {
         return reply.code(403).send({ statusMessage: 'Your subscription is not active. Please check your billing status.' })
       }
 

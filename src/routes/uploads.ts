@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { PutObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { checkStorageQuota, isValidFileType, checkUserQuota } from '../utils/quotas.js'
+import { checkStorageQuota, checkFileSizeLimit, isValidFileType, checkUserQuota } from '../utils/quotas.js'
 
 export default async function (fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate)
@@ -23,14 +23,20 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(400).send({ statusMessage: 'Invalid file type. Only JPEG, PNG, and WebP are allowed.' })
     }
 
-    // 2. Check Storage Quota and Subscription Status
-    const { plan, subscription } = await checkUserQuota(fastify, userId)
-    const activeStatuses = ['active', 'trialing', 'trial']
-    if (!subscription || !activeStatuses.includes(subscription.status)) {
-      if (subscription?.status === 'grace_period') {
-        return reply.code(403).send({ statusMessage: 'Uploads are disabled during grace period. Please renew your subscription.' })
-      }
+    // 2. Check subscription status and quotas
+    const { plan, canWrite, isGrace } = await checkUserQuota(fastify, userId)
+
+    if (isGrace) {
+      return reply.code(403).send({ statusMessage: 'Uploads are disabled during the grace period. Please renew your subscription.' })
+    }
+    if (!canWrite) {
       return reply.code(403).send({ statusMessage: 'Your subscription is not active. Please check your billing status.' })
+    }
+
+    // Per-file size limit
+    if (!checkFileSizeLimit(plan, Number(fileSize))) {
+      const mbLimit = Math.round(Number(plan.max_upload_bytes) / 1048576)
+      return reply.code(413).send({ statusMessage: `File too large. Your plan allows up to ${mbLimit} MB per upload.` })
     }
 
     const hasSpace = await checkStorageQuota(fastify, userId, Number(fileSize))
