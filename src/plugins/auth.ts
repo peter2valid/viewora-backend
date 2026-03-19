@@ -9,25 +9,34 @@ declare module 'fastify' {
 
 export default fp(async (fastify: FastifyInstance) => {
   fastify.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
+    const authHeader = request.headers.authorization
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Missing token' } })
+    }
+
+    const token = authHeader.split(' ')[1]
+
     try {
-      await request.jwtVerify({ audience: 'authenticated' } as any)
-      // The Supabase JWT payload is now available in `request.user`.
-      // The user's UUID is stored in the `sub` property of the token.
+      // Use Supabase directly to verify the token. 
+      // This handles ES256/HS256 and key rotation automatically.
+      const { data: { user }, error } = await fastify.supabase.auth.getUser(token)
+
+      if (error || !user) {
+        request.log.warn({ error: error?.message }, 'Auth failed')
+        return reply.code(401).send({ 
+          error: { 
+            code: 'UNAUTHORIZED', 
+            message: 'Invalid or expired token',
+            detail: process.env.NODE_ENV === 'development' ? error?.message : undefined
+          } 
+        })
+      }
+
+      // Attach user to request. Routes expect request.user.id
+      request.user = user as any
     } catch (err: any) {
-      request.log.warn({ 
-        ip: request.ip, 
-        route: request.url,
-        message: err.message,
-        code: err.code
-      }, 'Unauthorized API access attempt block')
-      
-      reply.code(401).send({ 
-        error: { 
-          code: 'UNAUTHORIZED', 
-          message: 'Invalid or missing token',
-          detail: process.env.NODE_ENV === 'development' ? err.message : undefined
-        } 
-      })
+      request.log.error(`Auth exception: ${err.message}`)
+      return reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Authentication error' } })
     }
   })
 })
