@@ -102,9 +102,10 @@ fastify.register(profileRoutes, { prefix: '/profile' })
 
 const start = async () => {
   try {
-    const port = parseInt(process.env.PORT || '8080')
+    const port = parseInt(process.env.PORT || '3000')
     await fastify.listen({ port, host: '0.0.0.0' })
-    console.log(`Backend listening on port ${port}`)
+    console.log(`✅ Server is running on port ${port}`)
+    console.log(`🚀 Accessible at http://0.0.0.0:${port}`)
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)
