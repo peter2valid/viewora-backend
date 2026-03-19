@@ -59,7 +59,7 @@ fastify.register(rawBody, {
 fastify.register(jwt, {
   secret: process.env.SUPABASE_JWT_SECRET!,
   verify: {
-    allowedAudiences: ['authenticated']
+    audience: 'authenticated'
   }
 })
 
