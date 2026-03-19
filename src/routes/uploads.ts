@@ -94,6 +94,7 @@ export default async function (fastify: FastifyInstance) {
       const customDomain = process.env.MEDIA_DOMAIN || `https://pub-${process.env.R2_ACCOUNT_ID}.r2.dev`
       const publicUrl = `${customDomain}/${objectKey}`
 
+      request.log.info({ userId, fileSize, type: mediaType }, 'Generated secure R2 signed upload URL')
       return reply.send({
         signedUrl,
         objectKey,
@@ -144,6 +145,8 @@ export default async function (fastify: FastifyInstance) {
       fastify.log.error(mediaErr)
       return reply.code(500).send({ statusMessage: 'Failed to save media record' })
     }
+
+    request.log.info({ userId, mediaId: media.id, size: fileSize }, 'Completed media metadata R2 sync securely')
 
     // 3. Update storage counter via RPC
     if (fileSize) {

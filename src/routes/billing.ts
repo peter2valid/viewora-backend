@@ -62,6 +62,8 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(500).send({ statusMessage: 'Billing configuration error' })
     }
 
+    request.log.info({ userId, planId, billingCycle }, 'Initializing new Paystack subscription transaction')
+
     try {
       const response = await axios.post(
         'https://api.paystack.co/transaction/initialize',
@@ -93,21 +95,27 @@ export default async function (fastify: FastifyInstance) {
 
   // WEBHOOK: VERIFY AND UPDATE SUBSCRIPTION
   // This route must NOT use the authenticate hook
-  fastify.post('/webhook/paystack', async (request, reply) => {
+  fastify.post('/webhook/paystack', { config: { rawBody: true } }, async (request, reply) => {
     const secret = process.env.PAYSTACK_SECRET_KEY
     if (!secret) return reply.code(500).send()
 
     // 1. Verify Signature
-    const hash = crypto
-      .createHmac('sha512', secret)
-      .update(JSON.stringify(request.body))
-      .digest('hex')
-
-    if (hash !== request.headers['x-paystack-signature']) {
-      fastify.log.warn('Invalid Paystack signature')
+    if (!request.rawBody) {
+      fastify.log.error('Missing raw body in webhook request')
       return reply.code(400).send()
     }
 
+    const hash = crypto
+      .createHmac('sha512', secret)
+      .update(request.rawBody)
+      .digest('hex')
+
+    if (hash !== request.headers['x-paystack-signature']) {
+      fastify.log.warn({ ip: request.ip }, 'CRITICAL: Blocked invalid Paystack webhook signature')
+      return reply.code(400).send()
+    }
+
+    fastify.log.info({ event: request.body.event }, 'Verified secure Paystack webhook')
     const event = request.body as any
 
     // Always return 200 immediately to acknowledge receipt to Paystack

@@ -17,11 +17,56 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(404).send({ statusMessage: 'Property not found or unpublished' })
     }
 
+    reply.header('Cache-Control', 'public, max-age=60, s-maxage=300')
     return reply.send(property)
   })
 
   // All other property routes require authentication
   fastify.addHook('preHandler', fastify.authenticate)
+
+  // GET all user properties
+  fastify.get('/', async (request, reply) => {
+    const user = request.user as any
+    const userId = user.sub
+
+    const { data, error } = await fastify.supabase
+      .from('properties')
+      .select('id, title, slug, description, property_type, location_text, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, created_at, updated_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      return reply.code(500).send({ statusMessage: error.message })
+    }
+
+    return reply.send(data || [])
+  })
+
+  // GET specific property
+  fastify.get('/:id', async (request, reply) => {
+    const user = request.user as any
+    const userId = user.sub
+    const { id } = request.params as any
+
+    const { data, error } = await fastify.supabase
+      .from('properties')
+      .select(`
+        id, title, slug, description, property_type, location_text,
+        cover_image_url, has_360, has_gallery, is_published, published_at,
+        visibility, lead_form_enabled, branding_enabled, created_at, updated_at,
+        property_media (id, media_type, storage_key, public_url, width, height, file_size_bytes, sort_order, is_primary, created_at),
+        property_360_settings (id, panorama_media_id, hfov_default, pitch_default, yaw_default, auto_rotate_enabled, hotspots_json)
+      `)
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single()
+
+    if (error) {
+      return reply.code(404).send({ statusMessage: 'Property not found' })
+    }
+
+    return reply.send(data)
+  })
 
   // CREATE property
   fastify.post('/', async (request, reply) => {

@@ -14,7 +14,8 @@ export default fp(async (fastify: FastifyInstance) => {
       // The Supabase JWT payload is now available in `request.user`.
       // The user's UUID is stored in the `sub` property of the token.
     } catch (err) {
-      reply.code(401).send({ error: 'Unauthorized', message: 'Invalid or missing token' })
+      request.log.warn({ ip: request.ip, route: request.url }, 'Unauthorized API access attempt block')
+      reply.code(401).send({ error: { code: 'UNAUTHORIZED', message: 'Invalid or missing token' } })
     }
   })
 })

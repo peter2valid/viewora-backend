@@ -1,7 +1,9 @@
-import Fastify from 'fastify'
+import Fastify, { FastifyError } from 'fastify'
 import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import dotenv from 'dotenv'
+import rawBody from 'fastify-raw-body'
+import rateLimit from '@fastify/rate-limit'
 
 import authPlugin from './plugins/auth.js'
 import supabasePlugin from './plugins/supabase.js'
@@ -12,6 +14,8 @@ import billingRoutes from './routes/billing.js'
 import uploadsRoutes from './routes/uploads.js'
 import leadsRoutes from './routes/leads.js'
 import analyticsRoutes from './routes/analytics.js'
+import dashboardRoutes from './routes/dashboard.js'
+import profileRoutes from './routes/profile.js'
 
 dotenv.config()
 
@@ -39,8 +43,15 @@ const fastify = Fastify({
 fastify.register(cors, {
   origin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-    : ['https://viewora.software', 'https://viewora.vercel.app'],
+    : ['http://localhost:3000', 'http://localhost:3001', 'https://viewora.software', 'https://app.viewora.software'],
   credentials: true,
+})
+
+fastify.register(rawBody, {
+  field: 'rawBody',
+  global: false,
+  encoding: 'utf8',
+  runFirst: true
 })
 
 // Supabase uses JWT for auth. We verify it using the Supabase JWT secret.
@@ -51,6 +62,29 @@ fastify.register(jwt, {
 fastify.register(authPlugin)
 fastify.register(supabasePlugin)
 fastify.register(s3Plugin)
+
+fastify.register(rateLimit, {
+  max: 100,
+  timeWindow: '1 minute'
+})
+
+// Global Error Handler for Standardization
+fastify.setErrorHandler(function (error: FastifyError, request, reply) {
+  this.log.error({ err: error, reqId: request.id }, 'System Error')
+  
+  if (error.statusCode === 429) {
+    return reply.status(429).send({
+      error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later.' }
+    })
+  }
+  
+  reply.status(error.statusCode || 500).send({
+    error: {
+      code: error.code || 'INTERNAL_SERVER_ERROR',
+      message: error.message || 'An unexpected error occurred'
+    }
+  })
+})
 
 // Health check
 fastify.get('/health', async () => {
@@ -63,6 +97,8 @@ fastify.register(billingRoutes, { prefix: '/billing' })
 fastify.register(uploadsRoutes, { prefix: '/uploads' })
 fastify.register(leadsRoutes, { prefix: '/leads' })
 fastify.register(analyticsRoutes, { prefix: '/analytics' })
+fastify.register(dashboardRoutes, { prefix: '/dashboard' })
+fastify.register(profileRoutes, { prefix: '/profile' })
 
 const start = async () => {
   try {
