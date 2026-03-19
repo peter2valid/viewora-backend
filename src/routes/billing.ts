@@ -122,8 +122,8 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(400).send()
     }
 
-    fastify.log.info({ event: request.body.event }, 'Verified secure Paystack webhook')
-    const event = request.body as any
+    const body = request.body as any
+    fastify.log.info({ event: body.event }, 'Verified secure Paystack webhook')
 
     // Always return 200 immediately to acknowledge receipt to Paystack
     reply.code(200).send()
