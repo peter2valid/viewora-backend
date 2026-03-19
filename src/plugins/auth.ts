@@ -10,7 +10,7 @@ declare module 'fastify' {
 export default fp(async (fastify: FastifyInstance) => {
   fastify.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      await request.jwtVerify({ audience: 'authenticated' })
+      await request.jwtVerify({ audience: 'authenticated' } as any)
       // The Supabase JWT payload is now available in `request.user`.
       // The user's UUID is stored in the `sub` property of the token.
     } catch (err: any) {
