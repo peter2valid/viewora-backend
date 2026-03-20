@@ -1,6 +1,32 @@
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import crypto from 'crypto'
 import axios from 'axios'
+
+// fastify-raw-body augments FastifyRequest with rawBody
+declare module 'fastify' {
+  interface FastifyRequest {
+    rawBody?: string | Buffer
+  }
+}
+
+interface BillingRequestBody {
+  planId?: string
+  billingCycle?: string
+}
+
+interface PaystackWebhookBody {
+  event: string
+  data?: {
+    reference?: string
+    [key: string]: unknown
+  }
+  metadata?: {
+    user_id?: string
+    plan_id?: string
+    billing_cycle?: string
+    [key: string]: unknown
+  }
+}
 
 export default async function (fastify: FastifyInstance) {
   
@@ -19,6 +45,7 @@ export default async function (fastify: FastifyInstance) {
       max_active_properties: undefined
     }))
 
+    reply.header('Cache-Control', 'public, max-age=300, s-maxage=600')
     return reply.send(mappedPlans)
   })
 
@@ -26,7 +53,7 @@ export default async function (fastify: FastifyInstance) {
   fastify.post('/initialize-paystack', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const user = request.user as any
     const userId = user.sub
-    const body = request.body as any
+    const body = request.body as BillingRequestBody
     const { planId, billingCycle } = body
 
     if (!planId || !billingCycle) {
@@ -122,7 +149,7 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(400).send()
     }
 
-    const body = request.body as any
+    const body = request.body as PaystackWebhookBody
     fastify.log.info({ event: body.event }, 'Verified secure Paystack webhook')
 
     // Always return 200 immediately to acknowledge receipt to Paystack
@@ -130,8 +157,8 @@ export default async function (fastify: FastifyInstance) {
 
     // 2. Process Event asynchronously after ack
     const eventType = body.event
-    const { metadata, data } = body ?? {}
-    const { reference } = data ?? {}
+    const { metadata, data } = body
+    const reference = data?.reference
     const userId: string | undefined = metadata?.user_id
     const planId: string | undefined = metadata?.plan_id
     const billingCycle: string | undefined = metadata?.billing_cycle
@@ -195,19 +222,19 @@ export default async function (fastify: FastifyInstance) {
     const user = request.user as any
     const userId = user.sub
 
-    // 1. Get Subscription + Plan
-    const { data: sub } = await fastify.supabase
-      .from('subscriptions')
-      .select('*, plans(*)')
-      .eq('user_id', userId)
-      .single()
-
-    // 2. Get Usage
-    const { data: usage } = await fastify.supabase
-      .from('usage_counters')
-      .select('active_properties_count, storage_used_bytes')
-      .eq('user_id', userId)
-      .single()
+    // Fetch subscription+plan and usage counters in parallel
+    const [{ data: sub }, { data: usage }] = await Promise.all([
+      fastify.supabase
+        .from('subscriptions')
+        .select('*, plans(*)')
+        .eq('user_id', userId)
+        .single(),
+      fastify.supabase
+        .from('usage_counters')
+        .select('active_properties_count, storage_used_bytes')
+        .eq('user_id', userId)
+        .single()
+    ])
 
     const finalPlan = sub?.plans || null
     let responsePlan: any = null
@@ -216,7 +243,7 @@ export default async function (fastify: FastifyInstance) {
       // Return default free state
       const { data: freePlan } = await fastify.supabase
         .from('plans')
-        .select('*')
+        .select('id, name, price_monthly_kes, price_yearly_kes, max_active_properties, max_storage_bytes, max_upload_bytes, lead_capture_enabled, branding_customization_enabled')
         .eq('name', 'Free')
         .single()
       responsePlan = freePlan
@@ -235,6 +262,7 @@ export default async function (fastify: FastifyInstance) {
       storage_used_bytes: usage?.storage_used_bytes || 0
     }
 
+    reply.header('Cache-Control', 'private, max-age=30')
     return reply.send({ 
       subscription: sub || null, 
       plan: mappedPlan,

@@ -51,6 +51,7 @@ export default async function (fastify: FastifyInstance) {
       property_type: undefined
     }))
 
+    reply.header('Cache-Control', 'private, max-age=30')
     return reply.send(mappedData)
   })
 

@@ -9,7 +9,7 @@ export default async function (fastify: FastifyInstance) {
     }
 
     try {
-      console.log('🔄 Maintenance: Updating plan upload limits...')
+      fastify.log.info('Maintenance: Updating plan upload limits...')
       const { data, error } = await fastify.supabase
         .from('plans')
         .update({ max_upload_bytes: 15728640 }) // 15MB
