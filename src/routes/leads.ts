@@ -65,25 +65,33 @@ export default async function (fastify: FastifyInstance) {
     const userId = user.sub
     const { id } = request.params as any
 
-    // Verify ownership via Supabase select
-    const { data: space } = await fastify.supabase
-      .from('properties')
-      .select('id')
-      .eq('id', id)
-      .eq('user_id', userId)
-      .single()
-
-    if (!space) {
-      return reply.code(403).send({ statusMessage: 'Unauthorized' })
-    }
-
+    // Verify ownership and fetch leads in a single join query
     const { data: leads, error } = await fastify.supabase
       .from('leads')
-      .select('*')
+      .select('id, name, email, phone, message, source, created_at, properties!inner(user_id)')
       .eq('property_id', id)
+      .eq('properties.user_id', userId)
       .order('created_at', { ascending: false })
 
     if (error) return reply.code(500).send({ statusMessage: 'Failed to fetch leads' })
-    return reply.send(leads)
+
+    // If no leads returned and ownership check failed, the join would return empty
+    // Verify ownership separately only when leads array is empty
+    if (!leads || leads.length === 0) {
+      const { data: space } = await fastify.supabase
+        .from('properties')
+        .select('id')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single()
+
+      if (!space) {
+        return reply.code(403).send({ statusMessage: 'Unauthorized' })
+      }
+    }
+
+    // Strip the joined properties field from the response
+    const cleanLeads = (leads || []).map(({ properties: _p, ...lead }) => lead)
+    return reply.send(cleanLeads)
   })
 }

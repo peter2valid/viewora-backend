@@ -1,4 +1,5 @@
 import Fastify, { FastifyError } from 'fastify'
+import compress from '@fastify/compress'
 import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import dotenv from 'dotenv'
@@ -41,6 +42,8 @@ const fastify = Fastify({
 })
 
 // Register plugins
+fastify.register(compress, { global: true })
+
 fastify.register(cors, {
   origin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())

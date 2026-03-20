@@ -69,7 +69,7 @@ export default async function (fastify: FastifyInstance) {
     // Fetch daily stats for all user's spaces
     const { data, error } = await fastify.supabase
       .from('analytics_daily')
-      .select('*, properties!inner(user_id, title)')
+      .select('id, property_id, date, total_views, direct_views, qr_views, embed_views, properties!inner(user_id, title)')
       .eq('properties.user_id', userId)
       .order('date', { ascending: false })
 
@@ -85,6 +85,7 @@ export default async function (fastify: FastifyInstance) {
       spaces: d.properties
     }))
 
+    reply.header('Cache-Control', 'private, max-age=120')
     return reply.send(mappedData)
   })
 
@@ -96,13 +97,14 @@ export default async function (fastify: FastifyInstance) {
 
     const { data, error } = await fastify.supabase
       .from('analytics_daily')
-      .select('*, properties!inner(user_id)')
+      .select('id, property_id, date, total_views, direct_views, qr_views, embed_views, properties!inner(user_id)')
       .eq('property_id', id)
       .eq('properties.user_id', userId)
       .order('date', { ascending: false })
       .limit(30)
 
     if (error) return reply.code(500).send({ statusMessage: 'Failed to fetch analytics' })
+    reply.header('Cache-Control', 'private, max-age=120')
     return reply.send(data)
   })
 }

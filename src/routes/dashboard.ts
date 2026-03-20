@@ -8,44 +8,49 @@ export default async function (fastify: FastifyInstance) {
     const user = request.user as any
     const userId = user.sub
 
-    // 1. Get user plan capabilities
-    const { plan } = await checkUserQuota(fastify, userId)
-
-    // 2. Spaces
-    const { data: spaces } = await fastify.supabase
-      .from('properties')
-      .select('id, is_published')
-      .eq('user_id', userId)
+    // Fetch plan capabilities and spaces list in parallel
+    const [{ plan }, { data: spaces }] = await Promise.all([
+      checkUserQuota(fastify, userId),
+      fastify.supabase
+        .from('properties')
+        .select('id, is_published')
+        .eq('user_id', userId)
+    ])
 
     const totalSpaces = spaces?.length ?? 0
     const publishedSpaces = spaces?.filter((p) => p.is_published).length ?? 0
     const spaceIds = (spaces ?? []).map((p) => p.id)
 
-    // 3. Leads (if entitled)
-    let newLeads7d: number | null = null
-    if (plan.lead_capture_enabled && spaceIds.length > 0) {
-      const { count } = await fastify.supabase
-        .from('leads')
-        .select('id', { count: 'exact', head: true })
-        .in('property_id', spaceIds)
-        .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+    // Fetch leads count and analytics views in parallel (when applicable)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
 
-      newLeads7d = count ?? 0
-    } else if (plan.lead_capture_enabled) {
-      newLeads7d = 0
-    }
+    const [leadsResult, analyticsResult] = await Promise.all([
+      plan.lead_capture_enabled && spaceIds.length > 0
+        ? fastify.supabase
+            .from('leads')
+            .select('id', { count: 'exact', head: true })
+            .in('property_id', spaceIds)
+            .gte('created_at', sevenDaysAgo)
+        : Promise.resolve({ count: plan.lead_capture_enabled ? 0 : null }),
+      spaceIds.length > 0
+        ? fastify.supabase
+            .from('analytics_daily')
+            .select('total_views')
+            .in('property_id', spaceIds)
+        : Promise.resolve({ data: [] })
+    ])
 
-    // 4. Analytics total views
-    let totalViews = 0
-    if (spaceIds.length > 0) {
-      const { data: analytics } = await fastify.supabase
-        .from('analytics_daily')
-        .select('total_views')
-        .in('property_id', spaceIds)
+    const newLeads7d: number | null = plan.lead_capture_enabled
+      ? (leadsResult.count ?? 0)
+      : null
 
-      totalViews = (analytics ?? []).reduce((sum: number, row: any) => sum + (row.total_views ?? 0), 0)
-    }
+    const analyticsData = (analyticsResult as any).data ?? []
+    const totalViews = analyticsData.reduce(
+      (sum: number, row: any) => sum + (row.total_views ?? 0),
+      0
+    )
 
+    reply.header('Cache-Control', 'private, max-age=60')
     return reply.send({
       total_spaces: totalSpaces,
       published_spaces: publishedSpaces,
