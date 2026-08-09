@@ -32,6 +32,7 @@ import autolinkRoutes from './routes/autolink.js'
 import captureRoutes from './routes/capture.js'
 import tilesRoutes from './routes/tiles.js'
 import whatsappRoutes from './routes/whatsapp.js'
+import internalConversationsRoutes from './routes/internal/conversations.js'
 import { createUploadQueue } from './queues/upload.queue.js'
 import type { Queue } from 'bullmq'
 import { getMetrics } from './utils/metrics.js'
@@ -375,6 +376,7 @@ fastify.register(autolinkRoutes)
 fastify.register(captureRoutes, { prefix: '/capture' })
 fastify.register(tilesRoutes)
 fastify.register(whatsappRoutes, { prefix: '/whatsapp' })
+fastify.register(internalConversationsRoutes, { prefix: '/internal/conversations' })
 process.stdout.write('✅ All plugins and routes registered\n')
 
 // Alias for /plans (used by frontend dashboard) to avoid 404

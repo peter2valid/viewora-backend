@@ -49,6 +49,7 @@ const completeUploadBodySchema = z.object({
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   fileSize: z.number().int().positive().optional(),
+  client_event_id: z.string().trim().max(255).optional(),
 }).superRefine((data, ctx) => {
   if (!data.spaceId && !data.propertyId) {
     ctx.addIssue({
@@ -216,6 +217,29 @@ export default async function (fastify: FastifyInstance) {
     const body = parseWithSchema(reply, completeUploadBodySchema, request.body)
     if (!body) return
 
+    const clientEventId = body.client_event_id ? String(body.client_event_id) : null
+    // Idempotency check via Redis: return existing media if client_event_id already processed
+    if (clientEventId && fastify.redis) {
+      try {
+        const cached = await fastify.redis.get(`idemp:uploads:${clientEventId}`)
+        if (cached) {
+          // cached stores media id
+          const mediaId = cached
+          const { data: cachedMedia } = await fastify.supabase
+            .from('property_media')
+            .select('*')
+            .eq('id', mediaId)
+            .single()
+          if (cachedMedia) {
+            request.log.info({ clientEventId, mediaId }, 'Idempotent upload complete hit')
+            return reply.send(cachedMedia)
+          }
+        }
+      } catch (err: any) {
+        request.log.warn({ err: err?.message, clientEventId }, 'Idempotency lookup failed')
+      }
+    }
+
     const { spaceId, propertyId, mediaType, objectKey, publicUrl, width, height, fileSize } = body
     const finalId = spaceId || propertyId
 
@@ -304,6 +328,10 @@ export default async function (fastify: FastifyInstance) {
           return reply.code(500).send({ statusMessage: 'Failed to save media record' })
         }
         request.log.info({ userId, mediaId: promoted.id, objectKey }, 'Promoted pending_upload placeholder to pending')
+        // Set idempotency key so repeated provider events are de-duped
+        if (clientEventId && fastify.redis) {
+          try { await fastify.redis.setEx(`idemp:uploads:${clientEventId}`, 60 * 60 * 24 * 7, promoted.id) } catch { /* noop */ }
+        }
         if (verifiedFileSize) {
           const hasSpace = await checkStorageQuota(fastify, userId, verifiedFileSize, verifiedPlan ?? undefined)
           if (!hasSpace) {
@@ -317,6 +345,9 @@ export default async function (fastify: FastifyInstance) {
       }
 
       request.log.info({ userId, mediaId: existingMedia.id, objectKey }, 'Upload completion idempotent hit')
+      if (clientEventId && fastify.redis) {
+        try { await fastify.redis.setEx(`idemp:uploads:${clientEventId}`, 60 * 60 * 24 * 7, existingMedia.id) } catch { /* noop */ }
+      }
       return reply.send(existingMedia)
     }
 
@@ -377,6 +408,10 @@ export default async function (fastify: FastifyInstance) {
 
     if (finalId) {
       scheduleMediaProcessing(fastify, media.id, finalId, userId, objectKey)
+    }
+
+    if (clientEventId && fastify.redis) {
+      try { await fastify.redis.setEx(`idemp:uploads:${clientEventId}`, 60 * 60 * 24 * 7, media.id) } catch { /* noop */ }
     }
 
     return reply.send(media)

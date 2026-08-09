@@ -55,8 +55,11 @@ export default fp(async (fastify: FastifyInstance) => {
         }
       }
 
+
       // Use Supabase directly to verify the token.
-      // This handles ES256/HS256 and key rotation automatically.
+      // This handles ES256/HS256 and key rotation automatically, and treats
+      // anonymous sessions (supabase.auth.signInAnonymously()) exactly like
+      // any other user — same user.id, same downstream quota/ownership checks.
       const { data: { user }, error } = await fastify.supabase.auth.getUser(token)
 
       if (error || !user) {
@@ -78,9 +81,10 @@ export default fp(async (fastify: FastifyInstance) => {
       } as any
 
       try {
-        const { plan, canWrite, isFree } = await checkUserQuota(fastify, user.id)
+        const userId = request.user?.sub || request.user?.id
+        const { plan, canWrite, isFree } = await checkUserQuota(fastify, userId)
         request.identity = {
-          id: user.id,
+          id: userId,
           plan: {
             id: typeof plan.id === 'string' ? plan.id : null,
             name: String(plan.name || 'Free'),
