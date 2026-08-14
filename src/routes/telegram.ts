@@ -21,7 +21,11 @@ export default async function telegramRoutes(fastify: FastifyInstance) {
       sendReply: (to, text) => sendMessage(to, text),
       fetchMedia,
     }).catch((err) => {
-      fastify.log.error({ err }, 'Telegram webhook processing failed')
+      // The error message is inlined directly into the log string (not just
+      // a structured field) because some log viewers (Railway's included)
+      // collapse structured fields in their default view, hiding exactly
+      // the detail needed to debug a production failure.
+      fastify.log.error(`Telegram webhook processing failed: ${err?.stack || err?.message || err}`)
       // Same fallback as scripts/telegram-poll.ts — a failure shouldn't mean
       // the user who just messaged gets silent, unexplained nothing back.
       sendMessage(message.replyTo, 'Something went wrong on my end — try again in a moment.').catch(() => {})

@@ -168,7 +168,7 @@ async function processMessage(
     const toSave: ConversationSession = { ...session, state: result.nextState, context: nextContext }
     // Never let a save failure mask whatever error the try block already threw.
     await saveSession(fastify, toSave).catch((err) =>
-      fastify.log.error({ err, sessionId: session.id }, 'Failed to persist conversation session'),
+      fastify.log.error(`Failed to persist conversation session ${session.id}: ${err?.stack || err?.message || err}`),
     )
   }
 }
