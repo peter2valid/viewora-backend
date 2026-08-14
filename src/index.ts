@@ -13,6 +13,7 @@ import authPlugin from './plugins/auth.js'
 import redisPlugin from './plugins/redis.js'
 import supabasePlugin from './plugins/supabase.js'
 import s3Plugin from './plugins/s3.js'
+import whatsappPlugin from './plugins/whatsapp.js'
 
 import spaceRoutes from './routes/spaces.js'
 import billingRoutes from './routes/billing.js'
@@ -30,6 +31,9 @@ import cronRoutes from './routes/cron.js'
 import autolinkRoutes from './routes/autolink.js'
 import captureRoutes from './routes/capture.js'
 import tilesRoutes from './routes/tiles.js'
+import whatsappRoutes from './routes/whatsapp.js'
+import telegramRoutes from './routes/telegram.js'
+import internalConversationsRoutes from './routes/internal/conversations.js'
 import { createUploadQueue } from './queues/upload.queue.js'
 import type { Queue } from 'bullmq'
 import { getMetrics } from './utils/metrics.js'
@@ -167,6 +171,7 @@ process.stdout.write('📦 Registering auth/supabase/s3 plugins...\n')
 fastify.register(authPlugin)
 fastify.register(supabasePlugin)
 fastify.register(s3Plugin)
+fastify.register(whatsappPlugin)
 
 process.stdout.write('📦 Registering health check route...\n')
 fastify.get('/health', async () => {
@@ -371,6 +376,9 @@ fastify.register(cronRoutes)
 fastify.register(autolinkRoutes)
 fastify.register(captureRoutes, { prefix: '/capture' })
 fastify.register(tilesRoutes)
+fastify.register(whatsappRoutes, { prefix: '/whatsapp' })
+fastify.register(telegramRoutes, { prefix: '/telegram' })
+fastify.register(internalConversationsRoutes, { prefix: '/internal/conversations' })
 process.stdout.write('✅ All plugins and routes registered\n')
 
 // Alias for /plans (used by frontend dashboard) to avoid 404
