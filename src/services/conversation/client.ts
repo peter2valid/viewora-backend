@@ -38,6 +38,14 @@ export function createClient(baseUrl: string, getAuthHeader: () => string | null
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} ${res.statusText} - ${JSON.stringify(json)}`)
     }
+    // Every successful response gets wrapped by index.ts's global onSend
+    // hook into { success: true, data: <actual payload>, meta }. Unwrap it
+    // so callers see the resource itself (id, slug, ...), not the envelope —
+    // this is the same shape frontend code gets automatically via
+    // useApiFetch's onResponse handler; this client needs to do it manually.
+    if (json && typeof json === 'object' && json.success === true && 'data' in json) {
+      return json.data
+    }
     return json
   }
 
