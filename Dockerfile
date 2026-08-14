@@ -1,16 +1,7 @@
-# ── Stage 1: Build basisu from source ────────────────────────────────────────
-FROM ubuntu:22.04 AS basisu-builder
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y cmake g++ git && \
-    rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 https://github.com/BinomialLLC/basis_universal.git /tmp/bu && \
-    cd /tmp/bu && \
-    cmake -DCMAKE_BUILD_TYPE=Release . && \
-    make -j$(nproc) basisu && \
-    find /tmp/bu -name basisu -type f ! -type d -exec cp {} /usr/local/bin/basisu \; && \
-    /usr/local/bin/basisu --version
-
-# ── Stage 2: Build the Node.js app ───────────────────────────────────────────
+# ── Stage 1: Build the Node.js app ───────────────────────────────────────────
+# basisu is NOT built here — this Dockerfile only builds the API service, which
+# never calls the basisu binary (only src/worker.ts does, via tile-processor.ts,
+# and the worker deploys separately through nixpacks.toml's aptPkgs).
 FROM node:22 AS app-builder
 WORKDIR /app
 COPY package*.json ./
@@ -18,12 +9,12 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# ── Stage 3: Production runtime ───────────────────────────────────────────────
+# ── Stage 2: Production runtime ───────────────────────────────────────────────
 FROM node:22-slim
 WORKDIR /app
-COPY --from=basisu-builder /usr/local/bin/basisu /usr/local/bin/basisu
+COPY package*.json ./
+RUN npm ci --omit=dev
 COPY --from=app-builder /app/dist ./dist
-COPY --from=app-builder /app/node_modules ./node_modules
-COPY package.json start.sh ./
-RUN chmod +x /usr/local/bin/basisu start.sh
+COPY start.sh ./
+RUN chmod +x start.sh
 CMD ["sh", "start.sh"]
