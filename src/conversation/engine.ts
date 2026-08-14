@@ -93,24 +93,31 @@ export function step(
       ])
     }
 
-    if (!context.propertyId) {
+    if (!context.propertyTitle) {
       if (!text) {
         return unchanged('active', context, [
           { kind: 'reply', text: 'Send me a name as text to continue.' },
         ])
       }
+      return unchanged('active', { ...context, propertyTitle: text }, [
+        { kind: 'reply', text: 'Want to add a description? Send it as text, or reply "skip".' },
+      ])
+    }
+
+    if (context.description === undefined) {
+      const description = !text || text.toLowerCase() === 'skip' ? '' : text
       return {
         nextState: 'awaiting_media',
-        nextContext: { ...context, propertyTitle: text },
+        nextContext: { ...context, description },
         actions: [
-          { kind: 'create_property', title: text, spaceType: context.spaceType },
+          { kind: 'create_property', title: context.propertyTitle, spaceType: context.spaceType, description },
           { kind: 'reply', text: 'Now send me your photos, one at a time. Type "done" when you\'re finished.' },
         ],
       }
     }
 
-    // context has both spaceType and propertyId but state wasn't advanced —
-    // shouldn't normally happen, but fail safe into awaiting_media rather than looping.
+    // Every gate above is satisfied but state wasn't advanced — shouldn't
+    // normally happen, but fail safe into awaiting_media rather than looping.
     return { nextState: 'awaiting_media', nextContext: context, actions: [{ kind: 'noop' }] }
   }
 
@@ -122,7 +129,14 @@ export function step(
           { kind: 'reply', text: 'Send at least one photo first, then type "done".' },
         ])
       }
-      return { nextState: 'completed', nextContext: context, actions: [{ kind: 'send_tour_link' }] }
+      return {
+        nextState: 'completed',
+        nextContext: context,
+        actions: [
+          { kind: 'reply', text: 'Processing your tour — this usually takes about 20 seconds...' },
+          { kind: 'send_tour_link' },
+        ],
+      }
     }
 
     if (message.type === 'image') {

@@ -23,6 +23,9 @@ export interface OrchestratorDeps {
 }
 
 const APP_URL = process.env.APP_URL || 'https://app.viewora.software'
+const PROCESSING_WAIT_MS = 20_000
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The webhook route acks Telegram before processing (routes/telegram.ts) so
 // it can respond fast, which means two updates from the same sender (e.g.
@@ -113,6 +116,7 @@ async function processMessage(
             const created = await client.createProperty({
               title: action.title,
               space_type: action.spaceType,
+              description: action.description || undefined,
             })
             nextContext = { ...nextContext, propertyId: created.id, slug: created.slug ?? created.id }
           } catch (err) {
@@ -191,6 +195,13 @@ async function processMessage(
             await logEvent(fastify, session.id, 'outbound', 'text', { text })
             break
           }
+
+          // Give uploaded media real time to finish processing (thumbnail
+          // generation, etc. — see utils/media-processor.ts's BullMQ queue)
+          // before checking whether the tour is actually ready. The webhook
+          // route already ack'd Telegram before this function was called, so
+          // holding here doesn't risk a webhook timeout.
+          await sleep(PROCESSING_WAIT_MS)
 
           const client = createClientForSession(accessToken)
           let text: string

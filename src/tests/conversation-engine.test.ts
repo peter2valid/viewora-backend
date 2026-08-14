@@ -36,7 +36,7 @@ test('new session greets with the menu and moves to active', () => {
   assert.equal(result.actions[0].kind, 'reply')
 })
 
-test('full happy path: menu -> name -> photos -> done', () => {
+test('full happy path: menu -> name -> description -> photos -> done', () => {
   let state: SessionState = 'new'
   let context: SessionContext = {}
 
@@ -51,12 +51,23 @@ test('full happy path: menu -> name -> photos -> done', () => {
   context = r.nextContext
   assert.equal(context.spaceType, 'residential')
 
-  // give a name -> should emit create_property and move to awaiting_media
+  // give a name -> should ask for a description next, not create yet
   r = step(state, context, textMessage('2 BHK Kilimani'))
   state = r.nextState
   context = r.nextContext
+  assert.equal(state, 'active')
+  assert.equal(context.propertyTitle, '2 BHK Kilimani')
+  assert.equal(context.description, undefined)
+  assert.ok(r.actions.every((a) => a.kind !== 'create_property'))
+
+  // give a description -> NOW create_property fires, with it included, and moves to awaiting_media
+  r = step(state, context, textMessage('Sunny corner unit, newly renovated'))
+  state = r.nextState
+  context = r.nextContext
   assert.equal(state, 'awaiting_media')
-  assert.ok(r.actions.some((a) => a.kind === 'create_property'))
+  const createAction = r.actions.find((a) => a.kind === 'create_property')
+  assert.ok(createAction && createAction.kind === 'create_property')
+  assert.equal(createAction.description, 'Sunny corner unit, newly renovated')
 
   // "done" with zero photos should be rejected
   r = step(state, context, textMessage('done'))
@@ -70,10 +81,20 @@ test('full happy path: menu -> name -> photos -> done', () => {
   assert.equal(context.photosUploaded, 1)
   assert.ok(r.actions.some((a) => a.kind === 'store_photo'))
 
-  // now "done" should complete
+  // now "done" should complete, telling the user it's processing first
   r = step(state, context, textMessage('done'))
   assert.equal(r.nextState, 'completed')
+  assert.ok(r.actions.some((a) => a.kind === 'reply' && a.text.toLowerCase().includes('processing')))
   assert.ok(r.actions.some((a) => a.kind === 'send_tour_link'))
+})
+
+test('"skip" on the description prompt creates the property with an empty description', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyTitle: 'Studio Colaba' }
+  const r = step('active', context, textMessage('skip'))
+  assert.equal(r.nextState, 'awaiting_media')
+  const createAction = r.actions.find((a) => a.kind === 'create_property')
+  assert.ok(createAction && createAction.kind === 'create_property')
+  assert.equal(createAction.description, '')
 })
 
 test('invalid menu choice is rejected without advancing', () => {

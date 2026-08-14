@@ -54,6 +54,9 @@ export interface SessionContext {
   spaceType?: SpaceType
   propertyId?: string
   propertyTitle?: string
+  // '' means "asked, and they skipped it" — distinct from undefined ("not
+  // asked yet"), so the engine knows whether to prompt for it.
+  description?: string
   slug?: string
   photosUploaded?: number
 }
@@ -77,7 +80,7 @@ export interface ConversationSession {
 // carry just enough to disambiguate intent, not duplicate message data.
 export type EngineAction =
   | { kind: 'reply'; text: string }
-  | { kind: 'create_property'; title: string; spaceType: SpaceType }
+  | { kind: 'create_property'; title: string; spaceType: SpaceType; description: string }
   | { kind: 'store_photo' }
   | { kind: 'send_tour_link' }
   | { kind: 'noop' }
