@@ -75,7 +75,9 @@ async function processMessage(
 
   const result = step(session.state, session.context, message)
 
-  const needsApi = result.actions.some((a) => a.kind === 'create_property' || a.kind === 'store_photo')
+  const needsApi = result.actions.some((a) =>
+    a.kind === 'create_property' || a.kind === 'store_photo' || a.kind === 'send_tour_link',
+  )
   let accessToken: string | null = null
   let nextContext = result.nextContext
   let nextState: SessionState = result.nextState
@@ -183,10 +185,30 @@ async function processMessage(
         }
 
         case 'send_tour_link': {
-          const slug = nextContext.slug ?? nextContext.propertyId
-          const text = slug
-            ? `Your tour is ready: ${APP_URL}/p/${slug}\n\nProcessing runs in the background — give it a minute if photos aren't showing yet.`
-            : "Something went wrong creating your tour — let's start over. Send \"hi\" to try again."
+          if (!accessToken || !nextContext.propertyId) {
+            const text = "Something went wrong creating your tour — let's start over. Send \"hi\" to try again."
+            await deps.sendReply(message.replyTo, text)
+            await logEvent(fastify, session.id, 'outbound', 'text', { text })
+            break
+          }
+
+          const client = createClientForSession(accessToken)
+          let text: string
+          try {
+            // Photos aren't enough on their own — publishing (making the
+            // tour actually reachable at a public URL) requires at least
+            // one processed panorama scene, a platform-wide rule enforced
+            // in spaces.ts, not something specific to this bot. Telegram
+            // photos are flat images, so this will currently always hit
+            // that wall — see the catch branch below for the honest reply.
+            const published = await client.publishProperty(nextContext.propertyId, true)
+            const slug = published.slug ?? nextContext.propertyId
+            text = `Your tour is ready: ${APP_URL}/p/${slug}\n\nProcessing runs in the background — give it a minute if photos aren't showing yet.`
+          } catch (err) {
+            if (!isUserFacingRejection(err)) throw err
+            text = "Your photos are saved, but I can't make this into a public tour yet — that needs at least one 360° photo, and regular photos alone can't be published as a tour. Your property's been created either way; a 360° shot would complete it."
+          }
+
           await deps.sendReply(message.replyTo, text)
           await logEvent(fastify, session.id, 'outbound', 'text', { text })
           break

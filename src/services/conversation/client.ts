@@ -25,6 +25,12 @@ type CompleteUploadRequest = {
   client_event_id?: string
 }
 
+type PublishResponse = {
+  id: string
+  slug: string | null
+  is_published: boolean
+}
+
 // Distinguishes "the backend rejected this for a real, expected reason"
 // (quota limits, inactive subscription — the error envelope's `code`/`message`
 // are meant to be shown to someone) from a genuine bug, so callers can choose
@@ -70,6 +76,9 @@ export function createClient(baseUrl: string, getAuthHeader: () => string | null
     },
     async completeUpload(body: CompleteUploadRequest) {
       return call('/uploads/complete', body)
+    },
+    async publishProperty(propertyId: string, publish: boolean): Promise<PublishResponse> {
+      return call(`/spaces/${propertyId}/publish`, { publish })
     },
   }
 }
