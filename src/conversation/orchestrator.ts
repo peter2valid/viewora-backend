@@ -188,6 +188,16 @@ async function processMessage(
               width: dims?.width,
               height: dims?.height,
             })
+
+            // property_media alone doesn't make this renderable — the
+            // viewer reads from `scenes`, and this is the call that both
+            // creates that row and enqueues the actual tile-generation job.
+            if (isPanorama) {
+              await client.createScene(nextContext.propertyId, {
+                name: `Scene ${nextContext.photosUploaded ?? 1}`,
+                raw_image_url: signed.publicUrl,
+              })
+            }
           } catch (err) {
             if (!isUserFacingRejection(err)) throw err
             // e.g. storage quota reached — stay in awaiting_media (the

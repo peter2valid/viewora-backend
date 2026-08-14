@@ -31,6 +31,11 @@ type PublishResponse = {
   is_published: boolean
 }
 
+type CreateSceneBody = {
+  name: string
+  raw_image_url: string
+}
+
 // Distinguishes "the backend rejected this for a real, expected reason"
 // (quota limits, inactive subscription — the error envelope's `code`/`message`
 // are meant to be shown to someone) from a genuine bug, so callers can choose
@@ -79,6 +84,17 @@ export function createClient(baseUrl: string, getAuthHeader: () => string | null
     },
     async publishProperty(propertyId: string, publish: boolean): Promise<PublishResponse> {
       return call(`/spaces/${propertyId}/publish`, { publish })
+    },
+    // Uploading a panorama to property_media (completeUpload) is NOT enough
+    // on its own — the viewer renders from the *scenes* table, and only this
+    // call creates a scene row and enqueues the actual tile-generation job
+    // ('tile-scene' — a different queue job than the one completeUpload
+    // schedules, which only does housekeeping like EXIF stripping). Skipping
+    // this is exactly why a property can show as "published" (property_media
+    // satisfies that check) while the tour page still says no renderable
+    // scenes exist.
+    async createScene(propertyId: string, body: CreateSceneBody) {
+      return call(`/spaces/${propertyId}/scenes`, body)
     },
   }
 }
