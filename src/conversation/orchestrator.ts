@@ -145,12 +145,22 @@ async function processMessage(
           if (!nextContext.propertyId) throw new Error('store_photo: no propertyId — property creation likely failed earlier this turn')
           const client = createClientForSession(accessToken)
 
+          // A real equirectangular panorama is ~2:1 (e.g. 11904x5952) —
+          // an ordinary phone photo never is. Telegram reports each photo's
+          // width/height directly (normalizer.ts), so this needs no image
+          // decoding — just the aspect ratio the provider already gave us.
+          // Below ~1.8 is comfortably outside normal landscape/portrait photo
+          // ratios (4:3, 3:2, 16:9) while still tolerant of slightly-off panoramas.
+          const dims = 'width' in message.payload ? message.payload : null
+          const isPanorama = !!(dims?.width && dims?.height && dims.width / dims.height >= 1.8)
+          const mediaType = isPanorama ? 'panorama' : 'gallery'
+
           try {
             const media = await deps.fetchMedia(message)
 
             const signed = await client.createSignedUrl({
               propertyId: nextContext.propertyId,
-              mediaType: 'gallery',
+              mediaType,
               fileName: media.fileName,
               contentType: media.contentType,
               fileSize: media.buffer.byteLength,
@@ -171,10 +181,12 @@ async function processMessage(
 
             await client.completeUpload({
               propertyId: nextContext.propertyId,
-              mediaType: 'gallery',
+              mediaType,
               objectKey: signed.objectKey,
               publicUrl: signed.publicUrl,
               fileSize: media.buffer.byteLength,
+              width: dims?.width,
+              height: dims?.height,
             })
           } catch (err) {
             if (!isUserFacingRejection(err)) throw err

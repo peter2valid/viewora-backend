@@ -141,12 +141,19 @@ export function step(
 
     if (message.type === 'image') {
       const photosUploaded = (context.photosUploaded ?? 0) + 1
+      // Same ~2:1 aspect-ratio check the Orchestrator uses to pick the
+      // upload's real media type — surfaced here too so someone sending a
+      // genuine 360° shot can see it was recognized as one, in real time,
+      // rather than finding out only when publish does or doesn't work.
+      const dims = 'width' in message.payload ? message.payload : null
+      const isPanorama = !!(dims?.width && dims?.height && dims.width / dims.height >= 1.8)
+      const photoKind = isPanorama ? '360° photo' : 'photo'
       return {
         nextState: 'awaiting_media',
         nextContext: { ...context, photosUploaded },
         actions: [
           { kind: 'store_photo' },
-          { kind: 'reply', text: `Got it (${photosUploaded} so far). Send more, or type "done".` },
+          { kind: 'reply', text: `Got it — ${photoKind} (${photosUploaded} so far). Send more, or type "done".` },
         ],
       }
     }

@@ -49,10 +49,12 @@ export async function getUpdates(offset: number, timeoutSec: number): Promise<Te
   return callApi<TelegramUpdate[]>('getUpdates', { offset, timeout: timeoutSec })
 }
 
-export function largestPhotoFileId(photos: NonNullable<TelegramUpdate['message']>['photo']): string {
+type PhotoSize = NonNullable<NonNullable<TelegramUpdate['message']>['photo']>[number]
+
+export function largestPhoto(photos: NonNullable<TelegramUpdate['message']>['photo']): PhotoSize {
   if (!photos || photos.length === 0) throw new Error('No photo sizes in message')
   // Telegram lists sizes smallest-to-largest; the last one is the highest resolution.
-  return photos[photos.length - 1].file_id
+  return photos[photos.length - 1]
 }
 
 export async function downloadFile(

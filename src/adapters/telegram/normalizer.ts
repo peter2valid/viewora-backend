@@ -1,6 +1,6 @@
 import type { IncomingMessage } from '../../conversation/types.js'
 import type { TelegramUpdate } from './client.js'
-import { largestPhotoFileId } from './client.js'
+import { largestPhoto } from './client.js'
 
 // Telegram Update -> the channel-agnostic IncomingMessage the engine consumes.
 // Returns null for update types we don't handle yet (edited messages, etc.)
@@ -21,7 +21,12 @@ export function normalizeTelegramUpdate(update: TelegramUpdate): IncomingMessage
   }
 
   if (message.photo && message.photo.length > 0) {
-    return { ...base, type: 'image', payload: { providerMediaId: largestPhotoFileId(message.photo) } }
+    const photo = largestPhoto(message.photo)
+    return {
+      ...base,
+      type: 'image',
+      payload: { providerMediaId: photo.file_id, width: photo.width, height: photo.height },
+    }
   }
 
   if (typeof message.text === 'string' && message.text.trim().length > 0) {

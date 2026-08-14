@@ -17,7 +17,7 @@ function textMessage(text: string): IncomingMessage {
   }
 }
 
-function imageMessage(): IncomingMessage {
+function imageMessage(width?: number, height?: number): IncomingMessage {
   return {
     id: 'm2',
     channel: 'telegram',
@@ -26,7 +26,7 @@ function imageMessage(): IncomingMessage {
     replyTo: 'sender-1',
     timestamp: new Date().toISOString(),
     type: 'image',
-    payload: { providerMediaId: 'file-abc' },
+    payload: { providerMediaId: 'file-abc', width, height },
   }
 }
 
@@ -95,6 +95,18 @@ test('"skip" on the description prompt creates the property with an empty descri
   const createAction = r.actions.find((a) => a.kind === 'create_property')
   assert.ok(createAction && createAction.kind === 'create_property')
   assert.equal(createAction.description, '')
+})
+
+test('a ~2:1 photo is recognized as a 360° shot; an ordinary photo is not', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyTitle: 'X', description: '' }
+
+  const pano = step('awaiting_media', context, imageMessage(11904, 5952))
+  const panoReply = pano.actions.find((a) => a.kind === 'reply')
+  assert.ok(panoReply && panoReply.kind === 'reply' && panoReply.text.includes('360°'))
+
+  const regular = step('awaiting_media', context, imageMessage(4032, 3024))
+  const regularReply = regular.actions.find((a) => a.kind === 'reply')
+  assert.ok(regularReply && regularReply.kind === 'reply' && !regularReply.text.includes('360°'))
 })
 
 test('invalid menu choice is rejected without advancing', () => {

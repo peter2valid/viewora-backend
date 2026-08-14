@@ -28,7 +28,10 @@ export interface IncomingMessage {
   type: IncomingMessageType
   payload:
     | { text: string }
-    | { providerMediaId: string; caption?: string }
+    // width/height (when the provider supplies them, e.g. Telegram) are what
+    // let the Orchestrator tell a real 360° panorama apart from a regular
+    // photo — an equirectangular panorama is ~2:1, an ordinary photo never is.
+    | { providerMediaId: string; caption?: string; width?: number; height?: number }
     | { id: string; text: string }
     | Record<string, never>
 }
