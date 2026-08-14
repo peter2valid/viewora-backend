@@ -8,8 +8,8 @@ import type { FastifyInstance } from 'fastify'
 import { step } from './engine.js'
 import { ensureAnonymousIdentity } from './anonymousAuth.js'
 import { findOrCreateSession, saveSession, logEvent } from './repository.js'
-import { createClientForSession } from '../services/conversation/client.js'
-import type { Channel, ConversationSession, IncomingMessage } from './types.js'
+import { createClientForSession, ApiError } from '../services/conversation/client.js'
+import type { Channel, ConversationSession, IncomingMessage, SessionState } from './types.js'
 
 export interface FetchedMedia {
   buffer: Buffer
@@ -55,6 +55,15 @@ export async function handleIncomingMessage(
   )
 }
 
+// A backend rejection carrying a message meant to be read by a human (quota
+// limits, inactive subscription — anything routes/uploads.ts or spaces.ts
+// sends as a 4xx with a real statusMessage) gets relayed as-is instead of
+// falling through to the generic "something went wrong" fallback. Anything
+// else (network failure, a genuine bug) still throws normally.
+function isUserFacingRejection(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status >= 400 && err.status < 500
+}
+
 async function processMessage(
   fastify: FastifyInstance,
   channel: Channel,
@@ -69,6 +78,7 @@ async function processMessage(
   const needsApi = result.actions.some((a) => a.kind === 'create_property' || a.kind === 'store_photo')
   let accessToken: string | null = null
   let nextContext = result.nextContext
+  let nextState: SessionState = result.nextState
 
   if (needsApi) {
     const identity = await ensureAnonymousIdentity({
@@ -86,7 +96,7 @@ async function processMessage(
   // session, and the next message re-enters "no propertyId yet" and creates
   // a second, orphaned property for the same request.
   try {
-    for (const action of result.actions) {
+    actionLoop: for (const action of result.actions) {
       switch (action.kind) {
         case 'reply': {
           await deps.sendReply(message.replyTo, action.text)
@@ -97,11 +107,24 @@ async function processMessage(
         case 'create_property': {
           if (!accessToken) break
           const client = createClientForSession(accessToken)
-          const created = await client.createProperty({
-            title: action.title,
-            space_type: action.spaceType,
-          })
-          nextContext = { ...nextContext, propertyId: created.id, slug: created.slug ?? created.id }
+          try {
+            const created = await client.createProperty({
+              title: action.title,
+              space_type: action.spaceType,
+            })
+            nextContext = { ...nextContext, propertyId: created.id, slug: created.slug ?? created.id }
+          } catch (err) {
+            if (!isUserFacingRejection(err)) throw err
+            // Roll back to re-asking for a name rather than advancing into
+            // awaiting_media with no property — keep spaceType so they don't
+            // have to repick 1-4, and skip the "send your photos" reply below
+            // since nothing was actually created.
+            nextContext = { spaceType: nextContext.spaceType }
+            nextState = 'active'
+            await deps.sendReply(message.replyTo, err.message)
+            await logEvent(fastify, session.id, 'outbound', 'text', { text: err.message })
+            break actionLoop
+          }
           break
         }
 
@@ -111,42 +134,51 @@ async function processMessage(
           // silently no-op-ing would still send the "Got it!" reply below
           // for a photo that was never actually stored anywhere. Throwing
           // instead stops the reply from firing and surfaces the failure
-          // through the same path any other error takes (fallback message
-          // to the user, full error in the logs).
+          // through the same path any other error takes.
           if (!accessToken) throw new Error('store_photo: no access token for this session')
           if (!nextContext.propertyId) throw new Error('store_photo: no propertyId — property creation likely failed earlier this turn')
           const client = createClientForSession(accessToken)
-          const media = await deps.fetchMedia(message)
 
-          const signed = await client.createSignedUrl({
-            propertyId: nextContext.propertyId,
-            mediaType: 'gallery',
-            fileName: media.fileName,
-            contentType: media.contentType,
-            fileSize: media.buffer.byteLength,
-          })
+          try {
+            const media = await deps.fetchMedia(message)
 
-          // Buffer already satisfies BodyInit at runtime; this project's
-          // @types/node fetch typings don't structurally agree with either a
-          // Buffer or a zero-copy Uint8Array view (both rejected by tsc —
-          // a lib-version quirk, not a real type mismatch), so this copy is
-          // the pragmatic way to satisfy the type checker. Negligible cost
-          // for a single photo on an upload path that's already doing a
-          // network round-trip.
-          const putRes = await fetch(signed.signedUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': media.contentType },
-            body: Uint8Array.from(media.buffer),
-          })
-          if (!putRes.ok) throw new Error(`R2 upload failed: HTTP ${putRes.status}`)
+            const signed = await client.createSignedUrl({
+              propertyId: nextContext.propertyId,
+              mediaType: 'gallery',
+              fileName: media.fileName,
+              contentType: media.contentType,
+              fileSize: media.buffer.byteLength,
+            })
 
-          await client.completeUpload({
-            propertyId: nextContext.propertyId,
-            mediaType: 'gallery',
-            objectKey: signed.objectKey,
-            publicUrl: signed.publicUrl,
-            fileSize: media.buffer.byteLength,
-          })
+            // Buffer already satisfies BodyInit at runtime; this project's
+            // @types/node fetch typings don't structurally agree with either
+            // a Buffer or a zero-copy Uint8Array view (both rejected by tsc
+            // — a lib-version quirk, not a real type mismatch), so this copy
+            // is the pragmatic way to satisfy the type checker. Negligible
+            // cost for a single photo on a path already doing a network round-trip.
+            const putRes = await fetch(signed.signedUrl, {
+              method: 'PUT',
+              headers: { 'Content-Type': media.contentType },
+              body: Uint8Array.from(media.buffer),
+            })
+            if (!putRes.ok) throw new Error(`R2 upload failed: HTTP ${putRes.status}`)
+
+            await client.completeUpload({
+              propertyId: nextContext.propertyId,
+              mediaType: 'gallery',
+              objectKey: signed.objectKey,
+              publicUrl: signed.publicUrl,
+              fileSize: media.buffer.byteLength,
+            })
+          } catch (err) {
+            if (!isUserFacingRejection(err)) throw err
+            // e.g. storage quota reached — stay in awaiting_media (the
+            // property is real and already has whatever photos succeeded
+            // before this one) rather than losing the whole session over it.
+            await deps.sendReply(message.replyTo, err.message)
+            await logEvent(fastify, session.id, 'outbound', 'text', { text: err.message })
+            break actionLoop
+          }
           break
         }
 
@@ -165,7 +197,7 @@ async function processMessage(
       }
     }
   } finally {
-    const toSave: ConversationSession = { ...session, state: result.nextState, context: nextContext }
+    const toSave: ConversationSession = { ...session, state: nextState, context: nextContext }
     // Never let a save failure mask whatever error the try block already threw.
     await saveSession(fastify, toSave).catch((err) =>
       fastify.log.error(`Failed to persist conversation session ${session.id}: ${err?.stack || err?.message || err}`),

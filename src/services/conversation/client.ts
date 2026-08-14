@@ -25,6 +25,17 @@ type CompleteUploadRequest = {
   client_event_id?: string
 }
 
+// Distinguishes "the backend rejected this for a real, expected reason"
+// (quota limits, inactive subscription — the error envelope's `code`/`message`
+// are meant to be shown to someone) from a genuine bug, so callers can choose
+// a friendly reply instead of falling through to a generic failure message.
+export class ApiError extends Error {
+  constructor(public status: number, public code: string | undefined, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 export function createClient(baseUrl: string, getAuthHeader: () => string | null) {
   async function call(path: string, body: unknown, method = 'POST') {
     const url = `${baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`
@@ -36,7 +47,8 @@ export function createClient(baseUrl: string, getAuthHeader: () => string | null
     let json: any
     try { json = text ? JSON.parse(text) : null } catch { json = null }
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status} ${res.statusText} - ${JSON.stringify(json)}`)
+      const message = typeof json?.message === 'string' ? json.message : `HTTP ${res.status} ${res.statusText}`
+      throw new ApiError(res.status, typeof json?.code === 'string' ? json.code : undefined, message)
     }
     // Every successful response gets wrapped by index.ts's global onSend
     // hook into { success: true, data: <actual payload>, meta }. Unwrap it
