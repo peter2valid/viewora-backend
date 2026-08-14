@@ -29,6 +29,8 @@ const MENU_TEXT = [
   'Reply with a number to get started.',
 ].join('\n')
 
+const RESTART_HINT = '(You can send "restart" anytime to start over.)'
+
 const TYPE_CHOICES: Record<string, SpaceType> = {
   '1': 'residential',
   '2': 'automotive',
@@ -40,6 +42,8 @@ const TYPE_CHOICES: Record<string, SpaceType> = {
   business: 'commercial',
   other: 'other',
 }
+
+const RESTART_KEYWORDS = new Set(['restart', 'cancel', 'reset', 'start over'])
 
 function textOf(message: IncomingMessage): string | null {
   if (message.type === 'text' && 'text' in message.payload) return message.payload.text.trim()
@@ -55,24 +59,33 @@ function unchanged(state: SessionState, context: SessionContext, actions: Engine
   return { nextState: state, nextContext: context, actions }
 }
 
+function freshMenu(): EngineResult {
+  return { nextState: 'active', nextContext: {}, actions: [{ kind: 'reply', text: MENU_TEXT }] }
+}
+
 export function step(
   state: SessionState,
   context: SessionContext,
   message: IncomingMessage,
 ): EngineResult {
+  const text = textOf(message)
+
+  // An explicit escape hatch from ANY state — including mid-flow states where
+  // something went wrong (e.g. property creation failed but the session
+  // still advanced past it). Without this, a transient failure partway
+  // through leaves someone permanently stuck with no way back to the menu.
+  if (text && RESTART_KEYWORDS.has(text.trim().toLowerCase())) return freshMenu()
+
   // 'completed' sessions restart fresh on the next message rather than
   // staying stuck — treat exactly like a brand new conversation.
-  if (state === 'new' || state === 'completed' || state === 'abandoned') {
-    return { nextState: 'active', nextContext: {}, actions: [{ kind: 'reply', text: MENU_TEXT }] }
-  }
+  if (state === 'new' || state === 'completed' || state === 'abandoned') return freshMenu()
 
   if (state === 'active') {
     if (!context.spaceType) {
-      const text = textOf(message)
       const spaceType = text ? parseSpaceType(text) : null
       if (!spaceType) {
         return unchanged('active', context, [
-          { kind: 'reply', text: "Sorry, I didn't catch that — reply with a number from 1 to 4." },
+          { kind: 'reply', text: `Sorry, I didn't catch that — reply with a number from 1 to 4. ${RESTART_HINT}` },
         ])
       }
       return unchanged('active', { ...context, spaceType }, [
@@ -81,17 +94,16 @@ export function step(
     }
 
     if (!context.propertyId) {
-      const title = textOf(message)
-      if (!title) {
+      if (!text) {
         return unchanged('active', context, [
           { kind: 'reply', text: 'Send me a name as text to continue.' },
         ])
       }
       return {
         nextState: 'awaiting_media',
-        nextContext: { ...context, propertyTitle: title },
+        nextContext: { ...context, propertyTitle: text },
         actions: [
-          { kind: 'create_property', title, spaceType: context.spaceType },
+          { kind: 'create_property', title: text, spaceType: context.spaceType },
           { kind: 'reply', text: 'Now send me your photos, one at a time. Type "done" when you\'re finished.' },
         ],
       }
@@ -103,7 +115,6 @@ export function step(
   }
 
   if (state === 'awaiting_media') {
-    const text = textOf(message)
     if (text && text.toLowerCase() === 'done') {
       const photosUploaded = context.photosUploaded ?? 0
       if (photosUploaded === 0) {
@@ -127,7 +138,7 @@ export function step(
     }
 
     return unchanged('awaiting_media', context, [
-      { kind: 'reply', text: 'Send a photo, or type "done" when you\'re finished.' },
+      { kind: 'reply', text: `Send a photo, or type "done" when you're finished. ${RESTART_HINT}` },
     ])
   }
 

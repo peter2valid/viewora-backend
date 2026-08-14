@@ -106,7 +106,15 @@ async function processMessage(
         }
 
         case 'store_photo': {
-          if (!accessToken || !nextContext.propertyId) break
+          // Missing accessToken/propertyId here means an earlier step in
+          // this same turn already failed (e.g. create_property errored) —
+          // silently no-op-ing would still send the "Got it!" reply below
+          // for a photo that was never actually stored anywhere. Throwing
+          // instead stops the reply from firing and surfaces the failure
+          // through the same path any other error takes (fallback message
+          // to the user, full error in the logs).
+          if (!accessToken) throw new Error('store_photo: no access token for this session')
+          if (!nextContext.propertyId) throw new Error('store_photo: no propertyId — property creation likely failed earlier this turn')
           const client = createClientForSession(accessToken)
           const media = await deps.fetchMedia(message)
 

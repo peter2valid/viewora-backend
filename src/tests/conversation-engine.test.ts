@@ -87,3 +87,19 @@ test('a completed session restarts fresh on the next message', () => {
   assert.equal(r.nextState, 'active')
   assert.deepEqual(r.nextContext, {})
 })
+
+test('"restart" resets to the menu from any mid-flow state, including a stuck one', () => {
+  // e.g. create_property failed earlier this turn: state advanced to
+  // awaiting_media but propertyId never got set — exactly what happened live.
+  const stuck: SessionContext = { spaceType: 'residential', propertyTitle: 'Juja bnb' }
+  const r = step('awaiting_media', stuck, textMessage('restart'))
+  assert.equal(r.nextState, 'active')
+  assert.deepEqual(r.nextContext, {})
+  assert.equal(r.actions[0].kind, 'reply')
+})
+
+test('restart keywords are case-insensitive and work from the menu-selection step too', () => {
+  const r = step('active', {}, textMessage('Cancel'))
+  assert.equal(r.nextState, 'active')
+  assert.deepEqual(r.nextContext, {})
+})
