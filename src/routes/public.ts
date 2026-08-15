@@ -10,6 +10,15 @@ const idParamsSchema = z.object({
   id: z.string().uuid(),
 })
 
+const listingsQuerySchema = z.object({
+  page: z.string().optional(),
+  limit: z.string().optional(),
+  type: z.enum(['all', 'residential', 'commercial', 'hospitality', 'education', 'automotive', 'other']).optional(),
+  status: z.enum(['all', 'available', 'sold', 'rented']).optional(),
+  sort: z.enum(['newest', 'price_asc', 'price_desc']).optional(),
+  q: z.string().max(200).optional(),
+})
+
 export default async function publicRoutes(fastify: FastifyInstance) {
 
   // ── AUTHENTICATED TOUR PREVIEW ─────────────────────────────
@@ -115,6 +124,96 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         updated_at: row.updated_at as string,
       })),
     })
+  })
+
+  // ── PUBLIC LISTINGS FEED ───────────────────────────────────
+  // Backs the Home tab (VIEWORA_2_PRODUCT_SPEC.md §6) — the buyer-facing
+  // discovery surface that didn't exist before this endpoint. No auth
+  // required. price_kes IS NOT NULL is the "must have a price to appear"
+  // rule from §3.1 — enforced here at the query level, not as a DB
+  // constraint, so it applies uniformly regardless of how a listing was
+  // created.
+  fastify.get('/listings', {
+    config: {
+      rateLimit: { max: 60, timeWindow: '1 minute', keyGenerator: (request: any) => request.ip },
+    },
+  }, async (req, reply) => {
+    const query = parseWithSchema(reply, listingsQuerySchema, (req as any).query)
+    if (!query) return
+
+    const limit = Math.min(Number(query.limit) || 20, 50)
+    const page = Math.max(Number(query.page) || 1, 1)
+    const from = (page - 1) * limit
+    const to = from + limit - 1
+
+    let builder = fastify.supabase
+      .from('properties')
+      .select(`
+        id, slug, title, property_type, location_text, price_kes, listing_status,
+        bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km,
+        vehicle_transmission, vehicle_fuel_type, amenities, phone, cover_image_url, created_at,
+        scenes ( thumbnail_url, order_index ),
+        property_media ( public_url, media_type, sort_order, is_primary, processing_status )
+      `, { count: 'exact' })
+      .eq('is_published', true)
+      .eq('visibility', 'public')
+      .not('price_kes', 'is', null)
+
+    if (query.type && query.type !== 'all') builder = builder.eq('property_type', query.type)
+    // Default to 'available' only — a buyer browsing the feed isn't looking
+    // for sold/rented listings unless they explicitly ask to see everything.
+    if (query.status && query.status !== 'all') builder = builder.eq('listing_status', query.status)
+    else if (!query.status) builder = builder.eq('listing_status', 'available')
+    if (query.q) builder = builder.ilike('location_text', `%${query.q}%`)
+
+    if (query.sort === 'price_asc') builder = builder.order('price_kes', { ascending: true })
+    else if (query.sort === 'price_desc') builder = builder.order('price_kes', { ascending: false })
+    else builder = builder.order('created_at', { ascending: false })
+
+    const { data, error, count } = await builder.range(from, to)
+
+    if (error) {
+      fastify.log.error(error, 'Failed to fetch public listings')
+      return reply.code(500).send({ statusMessage: 'Failed to fetch listings' })
+    }
+
+    const listings = (data || []).map((row: any) => {
+      // Prefer a real 360° scene thumbnail; fall back to a processed
+      // gallery photo (property_media) — the first real display surface
+      // gallery-only listings get anywhere in the product. Falls back to
+      // cover_image_url, then null (frontend shows a placeholder).
+      const sceneThumb = (row.scenes || [])
+        .filter((s: any) => s.thumbnail_url)
+        .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0))[0]?.thumbnail_url
+
+      const galleryPhoto = (row.property_media || [])
+        .filter((m: any) => m.media_type === 'gallery' && m.processing_status === 'complete' && m.public_url)
+        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.sort_order ?? 0) - (b.sort_order ?? 0))[0]?.public_url
+
+      return {
+        id: row.id,
+        slug: row.slug,
+        title: row.title,
+        space_type: row.property_type,
+        location_text: row.location_text,
+        price_kes: row.price_kes,
+        listing_status: row.listing_status,
+        bedrooms: row.bedrooms,
+        bathrooms: row.bathrooms,
+        area_sqm: row.area_sqm,
+        vehicle_year: row.vehicle_year,
+        vehicle_mileage_km: row.vehicle_mileage_km,
+        vehicle_transmission: row.vehicle_transmission,
+        vehicle_fuel_type: row.vehicle_fuel_type,
+        amenities: row.amenities || [],
+        phone: row.phone,
+        hero_image: sceneThumb || galleryPhoto || row.cover_image_url || null,
+        created_at: row.created_at,
+      }
+    })
+
+    reply.header('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120')
+    return reply.send({ data: listings, total: count ?? 0, page, limit })
   })
 
   // ── PUBLIC TOUR VIEWER ────────────────────────────────────
