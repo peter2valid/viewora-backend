@@ -12,9 +12,12 @@ import type {
   EngineAction,
   EngineResult,
   IncomingMessage,
+  ListingFacts,
   SessionContext,
   SessionState,
   SpaceType,
+  VehicleFuelType,
+  VehicleTransmission,
 } from './types.js'
 
 const MENU_TEXT = [
@@ -54,6 +57,77 @@ function textOf(message: IncomingMessage): string | null {
 function parseSpaceType(raw: string): SpaceType | null {
   return TYPE_CHOICES[raw.trim().toLowerCase()] ?? null
 }
+
+// Only residential and automotive listings get asked for type-aware facts —
+// commercial/other fall straight through to amenities (see the description
+// gate below). Land isn't a real SpaceType the bot offers today, so it's
+// deliberately not handled here.
+function factsNeededFor(spaceType: SpaceType): boolean {
+  return spaceType === 'residential' || spaceType === 'automotive'
+}
+
+function factsPrompt(spaceType: SpaceType): string {
+  if (spaceType === 'residential') {
+    return 'Bedrooms, bathrooms, and area? e.g. "4, 3, 220" for 4 bed / 3 bath / 220 m², or reply "skip".'
+  }
+  return 'Year, mileage (km), transmission, and fuel type? e.g. "2019, 45000, automatic, petrol", or reply "skip".'
+}
+
+function factsErrorPrompt(spaceType: SpaceType): string {
+  if (spaceType === 'residential') {
+    return `Sorry, I didn't catch that — send three numbers like "4, 3, 220", or reply "skip". ${RESTART_HINT}`
+  }
+  return `Sorry, I didn't catch that — send it like "2019, 45000, automatic, petrol" (transmission: manual/automatic, fuel: petrol/diesel/electric/hybrid), or reply "skip". ${RESTART_HINT}`
+}
+
+const VEHICLE_TRANSMISSIONS = new Set<VehicleTransmission>(['manual', 'automatic'])
+const VEHICLE_FUEL_TYPES = new Set<VehicleFuelType>(['petrol', 'diesel', 'electric', 'hybrid'])
+
+// Returns null on anything unparseable so the caller can re-prompt rather
+// than silently store a garbage value — same fail-fast approach as
+// parseSpaceType above. Callers check for a literal "skip" separately.
+function parseFacts(raw: string, spaceType: SpaceType): ListingFacts | null {
+  const parts = raw.split(',').map((p) => p.trim())
+
+  if (spaceType === 'residential') {
+    if (parts.length !== 3) return null
+    const [bedrooms, bathrooms, areaSqm] = parts.map((p) => Number.parseInt(p, 10))
+    if ([bedrooms, bathrooms, areaSqm].some((n) => !Number.isFinite(n) || n < 0)) return null
+    return { bedrooms, bathrooms, areaSqm }
+  }
+
+  if (spaceType === 'automotive') {
+    if (parts.length !== 4) return null
+    const [yearRaw, mileageRaw, transmissionRaw, fuelRaw] = parts
+    const vehicleYear = Number.parseInt(yearRaw, 10)
+    const vehicleMileageKm = Number.parseInt(mileageRaw, 10)
+    const vehicleTransmission = transmissionRaw.toLowerCase() as VehicleTransmission
+    const vehicleFuelType = fuelRaw.toLowerCase() as VehicleFuelType
+    if (!Number.isFinite(vehicleYear) || !Number.isFinite(vehicleMileageKm)) return null
+    if (!VEHICLE_TRANSMISSIONS.has(vehicleTransmission)) return null
+    if (!VEHICLE_FUEL_TYPES.has(vehicleFuelType)) return null
+    return { vehicleYear, vehicleMileageKm, vehicleTransmission, vehicleFuelType }
+  }
+
+  return {}
+}
+
+function parseAmenities(text: string | null): string[] {
+  if (!text || text.trim().toLowerCase() === 'skip') return []
+  return text.split(',').map((s) => s.trim()).filter(Boolean)
+}
+
+// Accepts "12500000" or "12,500,000" — rejects anything else (including
+// "skip": unlike description/facts/amenities, price is required per
+// VIEWORA_2_PRODUCT_SPEC.md §4.4).
+function parsePrice(raw: string): number | null {
+  const cleaned = raw.replace(/[,\s]/g, '')
+  if (!/^\d+$/.test(cleaned)) return null
+  const value = Number.parseInt(cleaned, 10)
+  return value > 0 ? value : null
+}
+
+const AMENITIES_PROMPT = 'Any amenities? e.g. "parking, security, wifi", or reply "skip".'
 
 function unchanged(state: SessionState, context: SessionContext, actions: EngineAction[]): EngineResult {
   return { nextState: state, nextContext: context, actions }
@@ -100,17 +174,86 @@ export function step(
         ])
       }
       return unchanged('active', { ...context, propertyTitle: text }, [
+        { kind: 'reply', text: '📍 Where is it located? (e.g. "Kilimani, Nairobi")' },
+      ])
+    }
+
+    // Location and price are the only required facts beyond name/type — see
+    // VIEWORA_2_PRODUCT_SPEC.md §4.4. Everything from here through amenities
+    // is optional and skippable.
+    if (!context.location) {
+      if (!text || text.length > 200) {
+        return unchanged('active', context, [
+          { kind: 'reply', text: `Send the location as text (under 200 characters). ${RESTART_HINT}` },
+        ])
+      }
+      return unchanged('active', { ...context, location: text }, [
+        { kind: 'reply', text: '💰 What\'s the price in KES?' },
+      ])
+    }
+
+    if (context.price === undefined) {
+      const price = text ? parsePrice(text) : null
+      if (!price) {
+        return unchanged('active', context, [
+          { kind: 'reply', text: `Send the price as a number in KES, e.g. "12500000". ${RESTART_HINT}` },
+        ])
+      }
+      return unchanged('active', { ...context, price }, [
         { kind: 'reply', text: 'Want to add a description? Send it as text, or reply "skip".' },
       ])
     }
 
     if (context.description === undefined) {
       const description = !text || text.toLowerCase() === 'skip' ? '' : text
+      const nextContext = { ...context, description }
+
+      // Commercial/other listings have no type-aware facts to ask — skip
+      // straight to amenities within this same turn rather than waiting on
+      // a message nothing needs an answer to.
+      if (!factsNeededFor(context.spaceType)) {
+        return unchanged('active', { ...nextContext, factsAsked: true, facts: {} }, [
+          { kind: 'reply', text: AMENITIES_PROMPT },
+        ])
+      }
+      return unchanged('active', nextContext, [
+        { kind: 'reply', text: factsPrompt(context.spaceType) },
+      ])
+    }
+
+    if (!context.factsAsked) {
+      if (text && text.trim().toLowerCase() === 'skip') {
+        return unchanged('active', { ...context, factsAsked: true, facts: {} }, [
+          { kind: 'reply', text: AMENITIES_PROMPT },
+        ])
+      }
+      const facts = text ? parseFacts(text, context.spaceType) : null
+      if (!facts) {
+        return unchanged('active', context, [
+          { kind: 'reply', text: factsErrorPrompt(context.spaceType) },
+        ])
+      }
+      return unchanged('active', { ...context, factsAsked: true, facts }, [
+        { kind: 'reply', text: AMENITIES_PROMPT },
+      ])
+    }
+
+    if (context.amenities === undefined) {
+      const amenities = parseAmenities(text)
       return {
         nextState: 'awaiting_media',
-        nextContext: { ...context, description },
+        nextContext: { ...context, amenities },
         actions: [
-          { kind: 'create_property', title: context.propertyTitle, spaceType: context.spaceType, description },
+          {
+            kind: 'create_property',
+            title: context.propertyTitle,
+            spaceType: context.spaceType,
+            description: context.description ?? '',
+            location: context.location,
+            price: context.price,
+            facts: context.facts ?? {},
+            amenities,
+          },
           { kind: 'reply', text: 'Now send me your photos, one at a time. Type "done" when you\'re finished.' },
         ],
       }

@@ -2,6 +2,16 @@ type CreatePropertyBody = {
   title: string
   space_type: string
   description?: string | null
+  location_text?: string
+  price_kes?: number
+  bedrooms?: number
+  bathrooms?: number
+  area_sqm?: number
+  vehicle_year?: number
+  vehicle_mileage_km?: number
+  vehicle_transmission?: string
+  vehicle_fuel_type?: string
+  amenities?: string[]
   slug?: string | null
   client_generated_id?: string
 }

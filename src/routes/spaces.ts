@@ -33,12 +33,33 @@ const idParamsSchema = z.object({
 
 const slugSchema = z.string().trim().min(3).max(120).regex(/^[a-z0-9-]+$/, 'Slug must contain only lowercase letters, numbers, and hyphens')
 
+// Shared with updateSpaceBodySchema below — the listing facts added for the
+// buyer-facing redesign (VIEWORA_2_PRODUCT_SPEC.md §3.1). All optional at
+// the DB level (see migration-add-listing-facts.sql) since existing rows
+// predate these columns; "must have a price to appear in the Home feed" is
+// enforced at the query level, not here.
+const listingFactsSchema = {
+  price_kes: z.number().int().positive().max(999_999_999_999).optional(),
+  listing_status: z.enum(['available', 'sold', 'rented']).optional(),
+  bedrooms: z.number().int().min(0).max(50).optional(),
+  bathrooms: z.number().int().min(0).max(50).optional(),
+  area_sqm: z.number().int().min(0).max(1_000_000).optional(),
+  vehicle_year: z.number().int().min(1900).max(2100).optional(),
+  vehicle_mileage_km: z.number().int().min(0).max(10_000_000).optional(),
+  vehicle_transmission: z.enum(['manual', 'automatic']).optional(),
+  vehicle_fuel_type: z.enum(['petrol', 'diesel', 'electric', 'hybrid']).optional(),
+  land_acres: z.number().min(0).max(1_000_000).optional(),
+  land_type: z.enum(['agricultural', 'commercial', 'residential']).optional(),
+  amenities: z.array(z.string().trim().min(1).max(60)).max(30).optional(),
+}
+
 const createSpaceBodySchema = z.object({
   title: z.string().trim().min(1).max(120),
   space_type: z.enum(['residential', 'commercial', 'hospitality', 'education', 'automotive', 'other']),
   description: z.string().max(2000).optional(),
   location_text: z.string().max(200).optional(),
   slug: slugSchema.optional(),
+  ...listingFactsSchema,
 })
 
 const updateSpaceBodySchema = z.object({
@@ -60,6 +81,7 @@ const updateSpaceBodySchema = z.object({
   cta_button_text: z.string().max(80).nullable().optional(),
   cta_action: z.enum(['link', 'email', 'phone']).nullable().optional(),
   cta_destination: z.string().max(2048).nullable().optional(),
+  ...listingFactsSchema,
 })
 
 const updateSettingsBodySchema = z.object({
@@ -89,7 +111,7 @@ export default async function (fastify: FastifyInstance) {
 
     const { data, error, count } = await fastify.supabase
       .from('properties')
-      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, created_at, updated_at', { count: 'exact' })
+      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, created_at, updated_at', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -171,7 +193,20 @@ export default async function (fastify: FastifyInstance) {
         title: body.title,
         description: body.description || null,
         slug: body.slug || null,
-        property_type: body.space_type
+        property_type: body.space_type,
+        location_text: body.location_text || null,
+        price_kes: body.price_kes,
+        listing_status: body.listing_status,
+        bedrooms: body.bedrooms,
+        bathrooms: body.bathrooms,
+        area_sqm: body.area_sqm,
+        vehicle_year: body.vehicle_year,
+        vehicle_mileage_km: body.vehicle_mileage_km,
+        vehicle_transmission: body.vehicle_transmission,
+        vehicle_fuel_type: body.vehicle_fuel_type,
+        land_acres: body.land_acres,
+        land_type: body.land_type,
+        amenities: body.amenities,
       })
       .select()
       .single()
@@ -231,6 +266,18 @@ export default async function (fastify: FastifyInstance) {
     if (body.lead_form_enabled !== undefined) updates.lead_form_enabled = body.lead_form_enabled
     if (body.branding_enabled !== undefined) updates.branding_enabled = body.branding_enabled
     if (body.slug !== undefined) updates.slug = body.slug
+    if (body.price_kes !== undefined) updates.price_kes = body.price_kes
+    if (body.listing_status !== undefined) updates.listing_status = body.listing_status
+    if (body.bedrooms !== undefined) updates.bedrooms = body.bedrooms
+    if (body.bathrooms !== undefined) updates.bathrooms = body.bathrooms
+    if (body.area_sqm !== undefined) updates.area_sqm = body.area_sqm
+    if (body.vehicle_year !== undefined) updates.vehicle_year = body.vehicle_year
+    if (body.vehicle_mileage_km !== undefined) updates.vehicle_mileage_km = body.vehicle_mileage_km
+    if (body.vehicle_transmission !== undefined) updates.vehicle_transmission = body.vehicle_transmission
+    if (body.vehicle_fuel_type !== undefined) updates.vehicle_fuel_type = body.vehicle_fuel_type
+    if (body.land_acres !== undefined) updates.land_acres = body.land_acres
+    if (body.land_type !== undefined) updates.land_type = body.land_type
+    if (body.amenities !== undefined) updates.amenities = body.amenities
 
     const { data: space, error } = await fastify.supabase
       .from('properties')

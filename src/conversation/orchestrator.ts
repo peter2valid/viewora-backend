@@ -117,18 +117,31 @@ async function processMessage(
               title: action.title,
               space_type: action.spaceType,
               description: action.description || undefined,
+              location_text: action.location,
+              price_kes: action.price,
+              bedrooms: action.facts.bedrooms,
+              bathrooms: action.facts.bathrooms,
+              area_sqm: action.facts.areaSqm,
+              vehicle_year: action.facts.vehicleYear,
+              vehicle_mileage_km: action.facts.vehicleMileageKm,
+              vehicle_transmission: action.facts.vehicleTransmission,
+              vehicle_fuel_type: action.facts.vehicleFuelType,
+              amenities: action.amenities.length > 0 ? action.amenities : undefined,
             })
             nextContext = { ...nextContext, propertyId: created.id, slug: created.slug ?? created.id }
           } catch (err) {
             if (!isUserFacingRejection(err)) throw err
-            // Roll back to re-asking for a name rather than advancing into
-            // awaiting_media with no property — keep spaceType so they don't
-            // have to repick 1-4, and skip the "send your photos" reply below
-            // since nothing was actually created.
-            nextContext = { spaceType: nextContext.spaceType }
+            // By this point name/location/price/description/facts have all
+            // already been collected — losing all of it over one transient
+            // failure (e.g. a quota limit) would be a bad regression from
+            // before this field collection existed. Only amenities was the
+            // answer that triggered this attempt, so that's the only thing
+            // that needs re-asking; everything else stays intact.
+            nextContext = { ...nextContext, amenities: undefined }
             nextState = 'active'
-            await deps.sendReply(message.replyTo, err.message)
-            await logEvent(fastify, session.id, 'outbound', 'text', { text: err.message })
+            const retryText = `${err.message} Send your amenities again (e.g. "parking, security, wifi", or "skip") to retry.`
+            await deps.sendReply(message.replyTo, retryText)
+            await logEvent(fastify, session.id, 'outbound', 'text', { text: retryText })
             break actionLoop
           }
           break

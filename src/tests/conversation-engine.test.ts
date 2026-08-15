@@ -36,7 +36,7 @@ test('new session greets with the menu and moves to active', () => {
   assert.equal(result.actions[0].kind, 'reply')
 })
 
-test('full happy path: menu -> name -> description -> photos -> done', () => {
+test('full happy path (residential): menu -> name -> location -> price -> description -> facts -> amenities -> photos -> done', () => {
   let state: SessionState = 'new'
   let context: SessionContext = {}
 
@@ -51,23 +51,58 @@ test('full happy path: menu -> name -> description -> photos -> done', () => {
   context = r.nextContext
   assert.equal(context.spaceType, 'residential')
 
-  // give a name -> should ask for a description next, not create yet
+  // give a name -> should ask for location next, not create yet
   r = step(state, context, textMessage('2 BHK Kilimani'))
   state = r.nextState
   context = r.nextContext
   assert.equal(state, 'active')
   assert.equal(context.propertyTitle, '2 BHK Kilimani')
-  assert.equal(context.description, undefined)
+  assert.equal(context.location, undefined)
   assert.ok(r.actions.every((a) => a.kind !== 'create_property'))
 
-  // give a description -> NOW create_property fires, with it included, and moves to awaiting_media
+  // location
+  r = step(state, context, textMessage('Kilimani, Nairobi'))
+  state = r.nextState
+  context = r.nextContext
+  assert.equal(context.location, 'Kilimani, Nairobi')
+  assert.equal(context.price, undefined)
+
+  // price
+  r = step(state, context, textMessage('12,500,000'))
+  state = r.nextState
+  context = r.nextContext
+  assert.equal(context.price, 12_500_000)
+  assert.equal(context.description, undefined)
+
+  // description
   r = step(state, context, textMessage('Sunny corner unit, newly renovated'))
+  state = r.nextState
+  context = r.nextContext
+  assert.equal(context.description, 'Sunny corner unit, newly renovated')
+  assert.ok(r.actions.every((a) => a.kind !== 'create_property'))
+  // residential -> facts prompt should ask for bed/bath/area, not fire create yet
+  assert.ok(r.actions.some((a) => a.kind === 'reply' && a.text.includes('Bedrooms')))
+
+  // facts
+  r = step(state, context, textMessage('4, 3, 220'))
+  state = r.nextState
+  context = r.nextContext
+  assert.deepEqual(context.facts, { bedrooms: 4, bathrooms: 3, areaSqm: 220 })
+  assert.equal(context.amenities, undefined)
+  assert.ok(r.actions.every((a) => a.kind !== 'create_property'))
+
+  // amenities -> NOW create_property fires with everything collected, moves to awaiting_media
+  r = step(state, context, textMessage('parking, security, wifi'))
   state = r.nextState
   context = r.nextContext
   assert.equal(state, 'awaiting_media')
   const createAction = r.actions.find((a) => a.kind === 'create_property')
   assert.ok(createAction && createAction.kind === 'create_property')
+  assert.equal(createAction.location, 'Kilimani, Nairobi')
+  assert.equal(createAction.price, 12_500_000)
   assert.equal(createAction.description, 'Sunny corner unit, newly renovated')
+  assert.deepEqual(createAction.facts, { bedrooms: 4, bathrooms: 3, areaSqm: 220 })
+  assert.deepEqual(createAction.amenities, ['parking', 'security', 'wifi'])
 
   // "done" with zero photos should be rejected
   r = step(state, context, textMessage('done'))
@@ -88,13 +123,79 @@ test('full happy path: menu -> name -> description -> photos -> done', () => {
   assert.ok(r.actions.some((a) => a.kind === 'send_tour_link'))
 })
 
-test('"skip" on the description prompt creates the property with an empty description', () => {
-  const context: SessionContext = { spaceType: 'residential', propertyTitle: 'Studio Colaba' }
+test('automotive listing asks for year/mileage/transmission/fuel, not bed/bath', () => {
+  const context: SessionContext = {
+    spaceType: 'automotive',
+    propertyTitle: '2019 Toyota Axio',
+    location: 'Westlands, Nairobi',
+    price: 1_800_000,
+  }
+
+  // answering description (with "skip") should land on the automotive-
+  // specific facts prompt, not the residential one
+  const afterDescription = step('active', context, textMessage('skip'))
+  const factsReply = afterDescription.actions.find((a) => a.kind === 'reply')
+  assert.ok(factsReply && factsReply.kind === 'reply' && factsReply.text.includes('mileage'))
+  assert.equal(afterDescription.nextContext.factsAsked, undefined)
+
+  const answered = step('active', afterDescription.nextContext, textMessage('2019, 45000, automatic, petrol'))
+  assert.deepEqual(answered.nextContext.facts, {
+    vehicleYear: 2019,
+    vehicleMileageKm: 45000,
+    vehicleTransmission: 'automatic',
+    vehicleFuelType: 'petrol',
+  })
+  assert.equal(answered.nextContext.factsAsked, true)
+})
+
+test('commercial/other listings skip the facts prompt entirely', () => {
+  const context: SessionContext = { spaceType: 'commercial', propertyTitle: 'Shop Unit', location: 'CBD, Nairobi', price: 500_000 }
   const r = step('active', context, textMessage('skip'))
+  assert.equal(r.nextContext.factsAsked, true)
+  assert.deepEqual(r.nextContext.facts, {})
+  assert.ok(r.actions.some((a) => a.kind === 'reply' && a.text.toLowerCase().includes('amenities')))
+})
+
+test('"skip" works on description, facts, and amenities prompts', () => {
+  let context: SessionContext = { spaceType: 'residential', propertyTitle: 'Studio Colaba', location: 'Colaba', price: 3_000_000 }
+
+  let r = step('active', context, textMessage('skip'))
+  context = r.nextContext
+  assert.equal(context.description, '')
+
+  r = step('active', context, textMessage('skip'))
+  context = r.nextContext
+  assert.equal(context.factsAsked, true)
+  assert.deepEqual(context.facts, {})
+
+  r = step('active', context, textMessage('skip'))
+  context = r.nextContext
   assert.equal(r.nextState, 'awaiting_media')
   const createAction = r.actions.find((a) => a.kind === 'create_property')
   assert.ok(createAction && createAction.kind === 'create_property')
   assert.equal(createAction.description, '')
+  assert.deepEqual(createAction.facts, {})
+  assert.deepEqual(createAction.amenities, [])
+})
+
+test('price must be a positive number; non-numeric input is rejected without advancing', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyTitle: 'X', location: 'Kilimani' }
+  const r = step('active', context, textMessage('expensive'))
+  assert.equal(r.nextContext.price, undefined)
+  assert.ok(r.actions.some((a) => a.kind === 'reply' && a.text.toLowerCase().includes('price')))
+})
+
+test('malformed facts input is rejected and re-prompted rather than silently accepted', () => {
+  const context: SessionContext = {
+    spaceType: 'residential',
+    propertyTitle: 'X',
+    location: 'Kilimani',
+    price: 1,
+    description: '',
+  }
+  const r = step('active', context, textMessage('lots of bedrooms'))
+  assert.equal(r.nextContext.factsAsked, undefined)
+  assert.ok(r.actions.some((a) => a.kind === 'reply' && a.text.toLowerCase().includes("didn't catch")))
 })
 
 test('a ~2:1 photo is recognized as a 360° shot; an ordinary photo is not', () => {
