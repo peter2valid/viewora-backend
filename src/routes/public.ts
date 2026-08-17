@@ -17,6 +17,11 @@ const listingsQuerySchema = z.object({
   status: z.enum(['all', 'available', 'sold', 'rented']).optional(),
   sort: z.enum(['newest', 'price_asc', 'price_desc']).optional(),
   q: z.string().max(200).optional(),
+  price_min: z.string().regex(/^\d+$/).optional(),
+  price_max: z.string().regex(/^\d+$/).optional(),
+  beds_min: z.string().regex(/^\d+$/).optional(),
+  baths_min: z.string().regex(/^\d+$/).optional(),
+  area_min: z.string().regex(/^\d+$/).optional(),
 })
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -164,7 +169,14 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     // for sold/rented listings unless they explicitly ask to see everything.
     if (query.status && query.status !== 'all') builder = builder.eq('listing_status', query.status)
     else if (!query.status) builder = builder.eq('listing_status', 'available')
-    if (query.q) builder = builder.ilike('location_text', `%${query.q}%`)
+    // Search tab (§7) matches on location or title — a buyer typing
+    // "Kilimani" or a car's make/model should both work.
+    if (query.q) builder = builder.or(`location_text.ilike.%${query.q}%,title.ilike.%${query.q}%`)
+    if (query.price_min) builder = builder.gte('price_kes', Number(query.price_min))
+    if (query.price_max) builder = builder.lte('price_kes', Number(query.price_max))
+    if (query.beds_min) builder = builder.gte('bedrooms', Number(query.beds_min))
+    if (query.baths_min) builder = builder.gte('bathrooms', Number(query.baths_min))
+    if (query.area_min) builder = builder.gte('area_sqm', Number(query.area_min))
 
     if (query.sort === 'price_asc') builder = builder.order('price_kes', { ascending: true })
     else if (query.sort === 'price_desc') builder = builder.order('price_kes', { ascending: false })
