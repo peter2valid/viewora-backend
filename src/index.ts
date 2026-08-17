@@ -134,6 +134,7 @@ const defaultCorsOrigins = [
   'http://localhost:3001',
   'https://viewora.software',
   'https://app.viewora.software',
+  'https://view.viewora.software',
   'https://*.vercel.app',
 ].map(normalizeOriginPattern)
 
