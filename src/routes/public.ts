@@ -219,6 +219,9 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         vehicle_fuel_type: row.vehicle_fuel_type,
         amenities: row.amenities || [],
         phone: row.phone,
+        // Distinguishes a real 360° scene thumbnail from a flat gallery/cover
+        // photo — the frontend must not badge the latter as "360°".
+        has_360: Boolean(sceneThumb),
         hero_image: sceneThumb || galleryPhoto || row.cover_image_url || null,
         created_at: row.created_at,
       }
@@ -245,45 +248,67 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     fastify.log.info({ slug: params.slug }, 'Public tour request')
     const cacheKey = `tour:${params.slug}`
 
+    let data: any
+    let cacheStatus: 'HIT' | 'MISS'
+
     // Serve from Redis cache when available — skips the Supabase RPC entirely
-    if (fastify.redis) {
-      const cached = await fastify.redis.get(cacheKey).catch(() => null)
-      if (cached) {
-        const data = JSON.parse(cached)
-        fastify.log.info({ slug: params.slug }, 'Public tour cache HIT')
-        reply.header('X-Cache', 'HIT')
-        return reply.send({ tour: data })
+    const cached = fastify.redis ? await fastify.redis.get(cacheKey).catch(() => null) : null
+    if (cached) {
+      data = JSON.parse(cached)
+      cacheStatus = 'HIT'
+      fastify.log.info({ slug: params.slug }, 'Public tour cache HIT')
+    } else {
+      const { data: rpcData, error } = await fastify.supabase
+        .rpc('get_tour_data', { p_slug: params.slug })
+
+      if (error) {
+        fastify.log.error({ error, slug: params.slug }, 'Public tour RPC error')
+        throw error
+      }
+
+      if (!rpcData) {
+        fastify.log.warn({ slug: params.slug }, 'Public tour not found in DB')
+        return reply.code(404).send({ statusMessage: 'Tour not found' })
+      }
+
+      fastify.log.info({ slug: params.slug }, 'Public tour DB HIT')
+      data = rpcData
+
+      // Map property_type to space_type for consistency with the frontend
+      if (data.space) {
+        data.space.space_type = data.space.property_type
+        delete data.space.property_type
+      }
+
+      cacheStatus = 'MISS'
+
+      // Cache tour data for 1h — safe because invalidateSpaceCache() is called on every
+      // publish, unpublish, scene update, hotspot change, and tile completion.
+      if (fastify.redis) {
+        void fastify.redis.setEx(cacheKey, 3600, JSON.stringify(data)).catch(() => {})
       }
     }
 
-    const { data, error } = await fastify.supabase
-      .rpc('get_tour_data', { p_slug: params.slug })
+    // Gallery photos are fetched fresh on every request rather than folded
+    // into the cached RPC blob above — uploads.ts has no cache-invalidation
+    // hook, so caching this would mean a newly processed gallery photo
+    // could take up to an hour to appear.
+    if (data.space?.id) {
+      const { data: galleryRows } = await fastify.supabase
+        .from('property_media')
+        .select('id, public_url, is_primary, sort_order')
+        .eq('property_id', data.space.id)
+        .eq('media_type', 'gallery')
+        .eq('processing_status', 'complete')
+        .order('is_primary', { ascending: false })
+        .order('sort_order', { ascending: true })
 
-    if (error) {
-      fastify.log.error({ error, slug: params.slug }, 'Public tour RPC error')
-      throw error
+      data.gallery = (galleryRows || []).map((r: any) => ({ id: r.id, url: r.public_url, is_primary: r.is_primary }))
+    } else {
+      data.gallery = []
     }
 
-    if (!data) {
-      fastify.log.warn({ slug: params.slug }, 'Public tour not found in DB')
-      return reply.code(404).send({ statusMessage: 'Tour not found' })
-    }
-
-    fastify.log.info({ slug: params.slug }, 'Public tour DB HIT')
-
-    // Map property_type to space_type for consistency with the frontend
-    if ((data as any).space) {
-      (data as any).space.space_type = (data as any).space.property_type;
-      delete (data as any).space.property_type;
-    }
-
-    // Cache tour data for 1h — safe because invalidateSpaceCache() is called on every
-    // publish, unpublish, scene update, hotspot change, and tile completion.
-    if (fastify.redis && data) {
-      void fastify.redis.setEx(cacheKey, 3600, JSON.stringify(data)).catch(() => {})
-    }
-
-    reply.header('X-Cache', 'MISS')
+    reply.header('X-Cache', cacheStatus)
     return reply.send({ tour: data })
   })
 }
