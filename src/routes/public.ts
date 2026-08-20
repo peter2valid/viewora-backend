@@ -26,6 +26,28 @@ const listingsQuerySchema = z.object({
 
 export default async function publicRoutes(fastify: FastifyInstance) {
 
+  // ── OWNER CHECK ──────────────────────────────────────────────
+  // Lets the public buyer-facing detail screen (view/p/[slug].vue) show
+  // inline owner-only editing without ever learning the owner's actual
+  // user_id — the public /p/:slug response deliberately never includes it
+  // (see migration-fix-public-tour-leak.sql). Auth required, so an
+  // anonymous buyer never even calls this.
+  fastify.get('/p/:slug/is-owner', { preHandler: fastify.authenticate }, async (req, reply) => {
+    const params = parseWithSchema(reply, tourParamsSchema, (req as any).params)
+    if (!params) return
+    const user = req.user as any
+    const userId = user.sub
+
+    const { data: space } = await fastify.supabase
+      .from('properties')
+      .select('id')
+      .or(`slug.eq.${params.slug},id.eq.${params.slug}`)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    return reply.send({ isOwner: !!space })
+  })
+
   // ── AUTHENTICATED TOUR PREVIEW ─────────────────────────────
   // Requires auth. Allows owners to preview their tour even if it's not published.
   fastify.get('/p/preview/:id', { preHandler: fastify.authenticate }, async (req, reply) => {
