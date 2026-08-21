@@ -4,7 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { z } from 'zod'
 import { checkStorageQuota, checkFileSizeLimit, isValidFileType, checkUserQuota } from '../utils/quotas.js'
 import { parseWithSchema } from '../utils/validation.js'
-import { scheduleMediaProcessing, updateUploadStatus } from '../utils/uploads.js'
+import { scheduleMediaProcessing, updateUploadStatus, refreshMediaFlags } from '../utils/uploads.js'
 
 const idParamsSchema = z.object({
   id: z.string().uuid(),
@@ -340,7 +340,10 @@ export default async function (fastify: FastifyInstance) {
           }
           await fastify.supabase.rpc('increment_storage_usage', { u_id: userId, bytes: verifiedFileSize })
         }
-        if (finalId) scheduleMediaProcessing(fastify, promoted.id, finalId, userId, objectKey)
+        if (finalId) {
+          await refreshMediaFlags(fastify, finalId)
+          scheduleMediaProcessing(fastify, promoted.id, finalId, userId, objectKey)
+        }
         return reply.send(promoted)
       }
 
@@ -376,19 +379,7 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(500).send({ statusMessage: 'Failed to save media record' })
     }
 
-    const { data: mediaTypes } = await fastify.supabase
-      .from('property_media')
-      .select('media_type')
-      .eq('property_id', finalId)
-
-    const uploadedTypes = new Set((mediaTypes || []).map((item: any) => item.media_type))
-    await fastify.supabase
-      .from('properties')
-      .update({
-        has_360: uploadedTypes.has('panorama'),
-        has_gallery: uploadedTypes.has('gallery_image'),
-      })
-      .eq('id', finalId)
+    if (finalId) await refreshMediaFlags(fastify, finalId)
 
     request.log.info({ userId, mediaId: media.id, size: verifiedFileSize, spaceId: finalId }, 'Completed media metadata R2 sync securely')
 
@@ -500,19 +491,7 @@ export default async function (fastify: FastifyInstance) {
       }
     }
 
-    const { data: remainingMedia } = await fastify.supabase
-      .from('property_media')
-      .select('media_type')
-      .eq('property_id', media.property_id)
-
-    const remainingTypes = new Set((remainingMedia || []).map((item: any) => item.media_type))
-    await fastify.supabase
-      .from('properties')
-      .update({
-        has_360: remainingTypes.has('panorama'),
-        has_gallery: remainingTypes.has('gallery_image'),
-      })
-      .eq('id', media.property_id)
+    await refreshMediaFlags(fastify, media.property_id)
 
     // 4. Decrement Storage Quota
     if (media.file_size_bytes) {

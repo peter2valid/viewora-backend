@@ -29,6 +29,31 @@ export async function updateUploadStatus(
     .eq('id', mediaId)
 }
 
+// Recomputes properties.has_360/has_gallery from the property's actual
+// media rows. Only the "no prior record" branch in routes/uploads.ts'
+// /complete handler called this inline — the far more common "promote a
+// pending_upload placeholder" branch never did, so these flags went stale
+// for the majority of real uploads. Neither flag is read by any public
+// display logic today (the Home feed's 360° badge is derived live from
+// real scene data instead — see routes/public.ts), so this had no visible
+// symptom, but it's real drift worth closing rather than leaving as a trap
+// for whatever reads these columns next.
+export async function refreshMediaFlags(fastify: FastifyInstance, propertyId: string) {
+  const { data: mediaTypes } = await fastify.supabase
+    .from('property_media')
+    .select('media_type')
+    .eq('property_id', propertyId)
+
+  const uploadedTypes = new Set((mediaTypes || []).map((item: any) => item.media_type))
+  await fastify.supabase
+    .from('properties')
+    .update({
+      has_360: uploadedTypes.has('panorama'),
+      has_gallery: uploadedTypes.has('gallery_image'),
+    })
+    .eq('id', propertyId)
+}
+
 /**
  * Queue a media processing job
  * This enqueues the job to BullMQ for asynchronous processing
