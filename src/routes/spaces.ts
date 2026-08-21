@@ -565,12 +565,18 @@ export default async function (fastify: FastifyInstance) {
         return reply.code(403).send({ statusMessage: 'Branding customization is not available on your current plan.' })
       }
 
-      // 4. Media Requirement Check
+      // 4. Media Requirement Check — a processed 360 scene OR a processed
+      // gallery photo satisfies this; photos-only listings (PhotosPanel.vue,
+      // used when the owner has no 360 camera) are a real, supported case,
+      // not a fallback.
       const hasPanorama = currentSpace.property_media?.some(
         (item: any) => item.media_type === 'panorama' && item.processing_status === 'complete'
       )
-      if (!hasPanorama) {
-        return reply.code(400).send({ statusMessage: 'Space must have at least one processed panorama image to be published.' })
+      const hasGalleryPhoto = currentSpace.property_media?.some(
+        (item: any) => item.media_type === 'gallery_image' && item.processing_status === 'complete'
+      )
+      if (!hasPanorama && !hasGalleryPhoto) {
+        return reply.code(400).send({ statusMessage: 'Add at least one processed 360° scene or photo before publishing.' })
       }
     }
     
