@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { parseWithSchema } from '../utils/validation.js'
+import { LISTING_SELECT_FRAGMENT, mapListingRow } from '../utils/listingMapper.js'
 
 const paramsSchema = z.object({
   propertyId: z.string().uuid(),
@@ -11,6 +12,35 @@ const paramsSchema = z.object({
 // ensureSession()/linkIdentity() pattern already used for anonymous
 // property creation, applied here to anonymous saving instead.
 export default async function savedRoutes(fastify: FastifyInstance) {
+  // List everything the current session has saved — feeds /view/profile.
+  // Registered before /:propertyId; Fastify's router treats a bare '/' and
+  // a param route as distinct patterns, so there's no ambiguity, but this
+  // keeps the "list" and "single item" routes read in a sensible order.
+  fastify.get('/', { preHandler: fastify.authenticate }, async (request, reply) => {
+    const userId = (request.user as any).sub
+
+    const { data, error } = await fastify.supabase
+      .from('saved_properties')
+      .select(`saved_at, properties!inner ( ${LISTING_SELECT_FRAGMENT} )`)
+      .eq('user_id', userId)
+      // A listing saved earlier can later be unpublished or taken down —
+      // don't show a saved item that would 404 if tapped.
+      .eq('properties.is_published', true)
+      .eq('properties.visibility', 'public')
+      .order('saved_at', { ascending: false })
+
+    if (error) {
+      fastify.log.error(error, 'Failed to fetch saved listings')
+      return reply.code(500).send({ statusMessage: 'Failed to fetch saved listings' })
+    }
+
+    const listings = (data || [])
+      .map((row: any) => row.properties && mapListingRow(row.properties))
+      .filter(Boolean)
+
+    return reply.send({ data: listings })
+  })
+
   fastify.get('/:propertyId', { preHandler: fastify.authenticate }, async (request, reply) => {
     const params = parseWithSchema(reply, paramsSchema, request.params)
     if (!params) return

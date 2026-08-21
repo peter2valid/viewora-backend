@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { parseWithSchema } from '../utils/validation.js'
+import { LISTING_SELECT_FRAGMENT, mapListingRow } from '../utils/listingMapper.js'
 
 const tourParamsSchema = z.object({
   slug: z.string().min(3).max(120).regex(/^[a-z0-9-]+$/, 'Invalid slug'),
@@ -22,6 +23,12 @@ const listingsQuerySchema = z.object({
   beds_min: z.string().regex(/^\d+$/).optional(),
   baths_min: z.string().regex(/^\d+$/).optional(),
   area_min: z.string().regex(/^\d+$/).optional(),
+  // Comma-separated UUIDs — powers the shareable "Collection" view
+  // (/view/collection?ids=...), an explicit, sender-picked set of listings
+  // rather than a saved filter. Bypasses the type/status/search filters and
+  // the 'available'-only default below: someone sharing "here's what I
+  // looked at" should still see a since-sold listing, not have it vanish.
+  ids: z.string().max(2000).optional(),
 })
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -173,84 +180,55 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     const from = (page - 1) * limit
     const to = from + limit - 1
 
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const idList = query.ids
+      ? query.ids.split(',').map((s) => s.trim()).filter((id) => uuidRe.test(id)).slice(0, 30)
+      : null
+
     let builder = fastify.supabase
       .from('properties')
-      .select(`
-        id, slug, title, property_type, location_text, price_kes, listing_status,
-        bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km,
-        vehicle_transmission, vehicle_fuel_type, amenities, phone, cover_image_url, created_at,
-        scenes ( thumbnail_url, order_index ),
-        property_media ( public_url, media_type, sort_order, is_primary, processing_status )
-      `, { count: 'exact' })
+      .select(LISTING_SELECT_FRAGMENT, { count: 'exact' })
       .eq('is_published', true)
       .eq('visibility', 'public')
       .not('price_kes', 'is', null)
 
-    if (query.type && query.type !== 'all') builder = builder.eq('property_type', query.type)
-    // Default to 'available' only — a buyer browsing the feed isn't looking
-    // for sold/rented listings unless they explicitly ask to see everything.
-    if (query.status && query.status !== 'all') builder = builder.eq('listing_status', query.status)
-    else if (!query.status) builder = builder.eq('listing_status', 'available')
-    // Search tab (§7) matches on location or title — a buyer typing
-    // "Kilimani" or a car's make/model should both work.
-    if (query.q) builder = builder.or(`location_text.ilike.%${query.q}%,title.ilike.%${query.q}%`)
-    if (query.price_min) builder = builder.gte('price_kes', Number(query.price_min))
-    if (query.price_max) builder = builder.lte('price_kes', Number(query.price_max))
-    if (query.beds_min) builder = builder.gte('bedrooms', Number(query.beds_min))
-    if (query.baths_min) builder = builder.gte('bathrooms', Number(query.baths_min))
-    if (query.area_min) builder = builder.gte('area_sqm', Number(query.area_min))
+    if (idList) {
+      // Collection view — an explicit, sender-picked set. No pagination, no
+      // status/type/search filters: whatever's in the list is what shows.
+      builder = builder.in('id', idList)
+    } else {
+      if (query.type && query.type !== 'all') builder = builder.eq('property_type', query.type)
+      // Default to 'available' only — a buyer browsing the feed isn't looking
+      // for sold/rented listings unless they explicitly ask to see everything.
+      if (query.status && query.status !== 'all') builder = builder.eq('listing_status', query.status)
+      else if (!query.status) builder = builder.eq('listing_status', 'available')
+      // Search tab (§7) matches on location or title — a buyer typing
+      // "Kilimani" or a car's make/model should both work.
+      if (query.q) builder = builder.or(`location_text.ilike.%${query.q}%,title.ilike.%${query.q}%`)
+      if (query.price_min) builder = builder.gte('price_kes', Number(query.price_min))
+      if (query.price_max) builder = builder.lte('price_kes', Number(query.price_max))
+      if (query.beds_min) builder = builder.gte('bedrooms', Number(query.beds_min))
+      if (query.baths_min) builder = builder.gte('bathrooms', Number(query.baths_min))
+      if (query.area_min) builder = builder.gte('area_sqm', Number(query.area_min))
 
-    if (query.sort === 'price_asc') builder = builder.order('price_kes', { ascending: true })
-    else if (query.sort === 'price_desc') builder = builder.order('price_kes', { ascending: false })
-    else builder = builder.order('created_at', { ascending: false })
+      if (query.sort === 'price_asc') builder = builder.order('price_kes', { ascending: true })
+      else if (query.sort === 'price_desc') builder = builder.order('price_kes', { ascending: false })
+      else builder = builder.order('created_at', { ascending: false })
 
-    const { data, error, count } = await builder.range(from, to)
+      builder = builder.range(from, to)
+    }
+
+    const { data, error, count } = await builder
 
     if (error) {
       fastify.log.error(error, 'Failed to fetch public listings')
       return reply.code(500).send({ statusMessage: 'Failed to fetch listings' })
     }
 
-    const listings = (data || []).map((row: any) => {
-      // Prefer a real 360° scene thumbnail; fall back to a processed
-      // gallery photo (property_media) — the first real display surface
-      // gallery-only listings get anywhere in the product. Falls back to
-      // cover_image_url, then null (frontend shows a placeholder).
-      const sceneThumb = (row.scenes || [])
-        .filter((s: any) => s.thumbnail_url)
-        .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0))[0]?.thumbnail_url
-
-      const galleryPhoto = (row.property_media || [])
-        .filter((m: any) => m.media_type === 'gallery_image' && m.processing_status === 'complete' && m.public_url)
-        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.sort_order ?? 0) - (b.sort_order ?? 0))[0]?.public_url
-
-      return {
-        id: row.id,
-        slug: row.slug,
-        title: row.title,
-        space_type: row.property_type,
-        location_text: row.location_text,
-        price_kes: row.price_kes,
-        listing_status: row.listing_status,
-        bedrooms: row.bedrooms,
-        bathrooms: row.bathrooms,
-        area_sqm: row.area_sqm,
-        vehicle_year: row.vehicle_year,
-        vehicle_mileage_km: row.vehicle_mileage_km,
-        vehicle_transmission: row.vehicle_transmission,
-        vehicle_fuel_type: row.vehicle_fuel_type,
-        amenities: row.amenities || [],
-        phone: row.phone,
-        // Distinguishes a real 360° scene thumbnail from a flat gallery/cover
-        // photo — the frontend must not badge the latter as "360°".
-        has_360: Boolean(sceneThumb),
-        hero_image: sceneThumb || galleryPhoto || row.cover_image_url || null,
-        created_at: row.created_at,
-      }
-    })
+    const listings = (data || []).map(mapListingRow)
 
     reply.header('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120')
-    return reply.send({ data: listings, total: count ?? 0, page, limit })
+    return reply.send({ data: listings, total: count ?? listings.length, page, limit })
   })
 
   // ── PUBLIC TOUR VIEWER ────────────────────────────────────
