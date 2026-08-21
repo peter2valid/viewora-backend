@@ -178,6 +178,29 @@ export default async function (fastify: FastifyInstance) {
     return reply.code(204).send()
   })
 
+  // AUTH ROUTE: Raw engagement rows across all of the caller's spaces —
+  // mirrors GET /summary's shape (raw per-row data, aggregated client-side)
+  // rather than a pre-aggregated total, so the dashboard's existing
+  // selectedInsightsTourId per-tour filter works on this the same way it
+  // already works on view/lead stats, with no extra endpoint needed per tour.
+  fastify.get('/engagement', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    const user = request.user as any
+    const userId = user.sub
+
+    const { data, error } = await fastify.supabase
+      .from('property_engagements')
+      .select('property_id, action, properties!inner(user_id)')
+      .eq('properties.user_id', userId)
+      .in('action', ['whatsapp_click', 'save'])
+
+    if (error) {
+      fastify.log.error(error, 'Failed to fetch engagement stats')
+      return reply.code(500).send({ statusMessage: 'Failed to fetch engagement stats' })
+    }
+
+    return reply.send((data || []).map((row: any) => ({ property_id: row.property_id, action: row.action })))
+  })
+
   // AUTH ROUTE: Engagement counts for one space, owner-only.
   fastify.get('/engagement/:id', { preHandler: [fastify.authenticate] }, async (request, reply) => {
     const user = request.user as any
