@@ -221,7 +221,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0))[0]?.thumbnail_url
 
       const galleryPhoto = (row.property_media || [])
-        .filter((m: any) => m.media_type === 'gallery' && m.processing_status === 'complete' && m.public_url)
+        .filter((m: any) => m.media_type === 'gallery_image' && m.processing_status === 'complete' && m.public_url)
         .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.sort_order ?? 0) - (b.sort_order ?? 0))[0]?.public_url
 
       return {
@@ -320,7 +320,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         .from('property_media')
         .select('id, public_url, is_primary, sort_order')
         .eq('property_id', data.space.id)
-        .eq('media_type', 'gallery')
+        .eq('media_type', 'gallery_image')
         .eq('processing_status', 'complete')
         .order('is_primary', { ascending: false })
         .order('sort_order', { ascending: true })
