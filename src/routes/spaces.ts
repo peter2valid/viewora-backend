@@ -7,6 +7,7 @@ import { parseWithSchema } from '../utils/validation.js'
 import { sendTourPublishedEmail } from '../email/index.js'
 import { invalidateSpaceCache } from '../utils/cache.js'
 import { generateSpaceFloorPlan } from '../utils/floor-plan-generator.js'
+import { generateListingDescription } from '../utils/aiDescription.js'
 
 // Converts a space title into a URL-safe slug.
 // "Modern 3-Bed Villa, Westlands" → "modern-3-bed-villa-westlands"
@@ -81,6 +82,17 @@ const updateSpaceBodySchema = z.object({
   cta_button_text: z.string().max(80).nullable().optional(),
   cta_action: z.enum(['link', 'email', 'phone']).nullable().optional(),
   cta_destination: z.string().max(2048).nullable().optional(),
+  ...listingFactsSchema,
+})
+
+// Deliberately takes the CURRENT (possibly unsaved) editor draft as the
+// request body rather than re-reading the DB — the owner may have just
+// typed a new price/bed count and not hit Save Settings yet, and the
+// description should reflect what's on screen, not stale saved values.
+const generateDescriptionBodySchema = z.object({
+  title: z.string().max(120).optional(),
+  space_type: z.enum(['residential', 'commercial', 'hospitality', 'education', 'automotive', 'other']).optional(),
+  location_text: z.string().max(200).optional(),
   ...listingFactsSchema,
 })
 
@@ -665,5 +677,61 @@ export default async function (fastify: FastifyInstance) {
     }
 
     return reply.send({ floorplanUrl })
+  })
+
+  // GENERATE DESCRIPTION — AI-drafted listing description from whatever
+  // facts are currently in the editor draft (price, bed/bath/m² or vehicle
+  // specs, amenities). Returns the draft text only; the owner reviews/edits
+  // it and saves via the normal PATCH /:id like any other field — this
+  // never writes silently.
+  fastify.post('/:id/generate-description', {
+    preHandler: [fastify.authenticate],
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const user = request.user as any
+    const userId = user.sub
+    const params = parseWithSchema(reply, idParamsSchema, request.params)
+    if (!params) return
+    const { id } = params
+    const body = parseWithSchema(reply, generateDescriptionBodySchema, request.body)
+    if (!body) return
+
+    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (!apiKey) {
+      return reply.code(503).send({
+        statusMessage: 'AI description generation requires ANTHROPIC_API_KEY to be configured on the server.',
+      })
+    }
+
+    const { data: space } = await fastify.supabase
+      .from('properties')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single()
+
+    if (!space) return reply.code(404).send({ statusMessage: 'Space not found.' })
+
+    try {
+      const description = await generateListingDescription({
+        title: body.title ?? null,
+        property_type: body.space_type ?? null,
+        location_text: body.location_text ?? null,
+        price_kes: body.price_kes ?? null,
+        bedrooms: body.bedrooms ?? null,
+        bathrooms: body.bathrooms ?? null,
+        area_sqm: body.area_sqm ?? null,
+        vehicle_year: body.vehicle_year ?? null,
+        vehicle_mileage_km: body.vehicle_mileage_km ?? null,
+        vehicle_transmission: body.vehicle_transmission ?? null,
+        vehicle_fuel_type: body.vehicle_fuel_type ?? null,
+        amenities: body.amenities ?? null,
+        listing_status: body.listing_status ?? null,
+      }, apiKey)
+      return reply.send({ description })
+    } catch (err: any) {
+      fastify.log.warn({ err: err.message, spaceId: id }, '[generate-description] failed')
+      return reply.code(502).send({ statusMessage: 'Could not generate a description right now — try again shortly.' })
+    }
   })
 }
