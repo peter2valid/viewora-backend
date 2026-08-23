@@ -20,6 +20,7 @@ const uploadMediaTypeSchema = z.enum([
   'floor_plan',
   'branding_logo',
   'audio',
+  'avatar',
 ])
 
 const createSignedUrlBodySchema = z.object({
@@ -30,8 +31,8 @@ const createSignedUrlBodySchema = z.object({
   contentType: z.string().trim().min(1).max(120),
   fileSize: z.number().int().positive().max(250_000_000),
 }).superRefine((data, ctx) => {
-  const isBrandingUpload = data.mediaType === 'logo' || data.mediaType === 'branding_logo'
-  if (!isBrandingUpload && !data.spaceId && !data.propertyId) {
+  const isAccountLevelUpload = data.mediaType === 'logo' || data.mediaType === 'branding_logo' || data.mediaType === 'avatar'
+  if (!isAccountLevelUpload && !data.spaceId && !data.propertyId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'spaceId or propertyId is required',
@@ -107,10 +108,10 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(403).send({ statusMessage: 'Storage limit reached. Please upgrade your plan.' })
     }
 
-    const isBrandingUpload = mediaType === 'logo' || mediaType === 'branding_logo'
+    const isAccountLevelUpload = mediaType === 'logo' || mediaType === 'branding_logo' || mediaType === 'avatar'
 
     // 3. Verify Space Ownership for space-bound uploads
-    if (!isBrandingUpload) {
+    if (!isAccountLevelUpload) {
       const { data: space, error: spaceErr } = await fastify.supabase
         .from('properties')
         .select('id')
@@ -131,6 +132,7 @@ export default async function (fastify: FastifyInstance) {
     else if (mediaType === 'floor_plan') folder = 'floor_plan'
     else if (mediaType === 'audio') folder = 'audio'
     else if (mediaType === 'logo' || mediaType === 'branding_logo') folder = 'branding'
+    else if (mediaType === 'avatar') folder = 'avatar'
     else return reply.code(400).send({ statusMessage: 'Invalid media type' })
 
     // Sanitise extension: only allow alphanumeric chars, clamp to 8 chars.
@@ -138,10 +140,12 @@ export default async function (fastify: FastifyInstance) {
     const rawExt = (fileName.split('.').pop() ?? '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)
     const fileExt = rawExt || 'bin'
     const uniqueFileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`
-    
+
     let objectKey = `users/${userId}/spaces/${finalId}/${folder}/${uniqueFileName}`
     if (mediaType === 'logo' || mediaType === 'branding_logo') {
       objectKey = `users/${userId}/branding/${uniqueFileName}`
+    } else if (mediaType === 'avatar') {
+      objectKey = `users/${userId}/avatar/${uniqueFileName}`
     }
 
     // 5. Generate Signed URL
@@ -171,7 +175,7 @@ export default async function (fastify: FastifyInstance) {
       // Track the pending upload so the orphan sweep can delete R2 objects
       // that were uploaded but never completed via /uploads/complete.
       // The /complete handler finds this row by storage_key and updates it.
-      if (!isBrandingUpload && finalId) {
+      if (!isAccountLevelUpload && finalId) {
         let dbMediaType = mediaType
         if (mediaType === 'gallery') dbMediaType = 'gallery_image' as typeof mediaType
         if (mediaType === 'thumb')   dbMediaType = 'thumbnail'    as typeof mediaType
