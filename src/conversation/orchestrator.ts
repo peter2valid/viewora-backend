@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify'
 import { step } from './engine.js'
 import { ensureAnonymousIdentity } from './anonymousAuth.js'
 import { findOrCreateSession, saveSession, logEvent } from './repository.js'
-import { createClientForSession, ApiError } from '../services/conversation/client.js'
+import { createClientForSession, createInternalClientForUser, ApiError } from '../services/conversation/client.js'
 import { generateClaimToken } from '../utils/claimTokens.js'
 import type { Channel, ConversationSession, IncomingMessage, SessionState } from './types.js'
 
@@ -280,6 +280,46 @@ async function processMessage(
 
           await deps.sendReply(message.replyTo, text)
           await logEvent(fastify, session.id, 'outbound', 'text', { text })
+          break
+        }
+
+        case 'update_property_price': {
+          // Deliberately does NOT use ensureAnonymousIdentity()/accessToken —
+          // this can fire long after the creation-time session's refresh
+          // token has gone stale (most commonly because the listing was
+          // since claimed and the claimer's browser rotated it away). Trying
+          // to refresh it here would either fail outright or, worse, mint an
+          // unrelated brand-new anonymous user that then gets persisted onto
+          // this session at the end of this function — permanently severing
+          // the link to the real property. Instead: verify this sender's
+          // ORIGINAL user_id still owns this exact property, and act via the
+          // internal trust path if so (see plugins/auth.ts).
+          let client: ReturnType<typeof createInternalClientForUser> | null = null
+          if (session.supabaseUserId) {
+            const { data: owned } = await fastify.supabase
+              .from('properties')
+              .select('id')
+              .eq('id', action.propertyId)
+              .eq('user_id', session.supabaseUserId)
+              .maybeSingle()
+            if (owned) client = createInternalClientForUser(session.supabaseUserId)
+          }
+
+          if (!client) {
+            const text = "I couldn't find that listing under your account anymore — open it on the web to make changes there."
+            await deps.sendReply(message.replyTo, text)
+            await logEvent(fastify, session.id, 'outbound', 'text', { text })
+            break actionLoop
+          }
+
+          try {
+            await client.updateProperty(action.propertyId, { price_kes: action.price })
+          } catch (err) {
+            if (!isUserFacingRejection(err)) throw err
+            await deps.sendReply(message.replyTo, err.message)
+            await logEvent(fastify, session.id, 'outbound', 'text', { text: err.message })
+            break actionLoop
+          }
           break
         }
 

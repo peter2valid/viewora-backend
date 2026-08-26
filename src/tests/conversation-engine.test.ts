@@ -222,6 +222,33 @@ test('a completed session restarts fresh on the next message', () => {
   assert.deepEqual(r.nextContext, {})
 })
 
+test('a completed session recognizes a price-change command instead of restarting', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyId: 'prop-1' }
+  const r = step('completed', context, textMessage('change the price to 130,000'))
+  assert.equal(r.nextState, 'completed')
+  // Unlike the generic restart-fresh path, context (and propertyId with it)
+  // must survive — there's no new listing being started here.
+  assert.deepEqual(r.nextContext, context)
+  const updateAction = r.actions.find((a) => a.kind === 'update_property_price')
+  assert.ok(updateAction && updateAction.kind === 'update_property_price')
+  assert.equal(updateAction.propertyId, 'prop-1')
+  assert.equal(updateAction.price, 130_000)
+  assert.ok(r.actions.some((a) => a.kind === 'reply' && a.text.includes('130,000')))
+})
+
+test('a price-change command with no propertyId falls through to restart (nothing to update)', () => {
+  const r = step('completed', { spaceType: 'residential' }, textMessage('change the price to 130000'))
+  assert.equal(r.nextState, 'active')
+  assert.deepEqual(r.nextContext, {})
+})
+
+test('an unrecognized message after completion still restarts fresh, not just non-price ones', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyId: 'prop-1' }
+  const r = step('completed', context, textMessage('what is my listing status'))
+  assert.equal(r.nextState, 'active')
+  assert.deepEqual(r.nextContext, {})
+})
+
 test('"restart" resets to the menu from any mid-flow state, including a stuck one', () => {
   // e.g. create_property failed earlier this turn: state advanced to
   // awaiting_media but propertyId never got set — exactly what happened live.

@@ -119,6 +119,13 @@ export type EngineAction =
     }
   | { kind: 'store_photo' }
   | { kind: 'send_tour_link' }
+  // Only reachable from the 'completed' state, potentially long after the
+  // creation-time anonymous session's access/refresh token pair has gone
+  // stale (most commonly because the listing was since claimed and the
+  // claimer's browser rotated it away — see VIEWORA_ARCHITECTURE_AUDIT.md
+  // Journey 7). The Orchestrator resolves authorization for this action
+  // differently from the others as a result — see orchestrator.ts.
+  | { kind: 'update_property_price'; propertyId: string; price: number }
   | { kind: 'noop' }
 
 export interface EngineResult {

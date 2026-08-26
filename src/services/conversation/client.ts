@@ -58,12 +58,10 @@ export class ApiError extends Error {
   }
 }
 
-export function createClient(baseUrl: string, getAuthHeader: () => string | null) {
+export function createClient(baseUrl: string, getHeaders: () => Record<string, string>) {
   async function call(path: string, body: unknown, method = 'POST') {
     const url = `${baseUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`
-    const auth = getAuthHeader()
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (auth) headers.Authorization = auth
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...getHeaders() }
     const res = await fetch(url, { method, headers, body: JSON.stringify(body) })
     const text = await res.text()
     let json: any
@@ -107,15 +105,35 @@ export function createClient(baseUrl: string, getAuthHeader: () => string | null
     async createScene(propertyId: string, body: CreateSceneBody) {
       return call(`/spaces/${propertyId}/scenes`, body)
     },
+    // Generic PATCH /spaces/:id — used by the 'completed'-state price-change
+    // command (conversation/engine.ts's update_property_price action). Keep
+    // this generic rather than a one-off updatePrice() — the same shape
+    // covers any other single-field edit command added later.
+    async updateProperty(propertyId: string, body: Record<string, unknown>) {
+      return call(`/spaces/${propertyId}`, body, 'PATCH')
+    },
   }
 }
 
-// A static INTERNAL_API_KEY never actually worked here — /spaces and
-// /uploads/* require a real Supabase-verified user token (fastify.authenticate),
-// not an arbitrary internal secret. Each conversation session has its own real
-// Supabase user (see conversation/anonymousAuth.ts); use that session's
-// access token so calls are authenticated exactly like any other user's.
+// Each conversation session normally has its own real (anonymous) Supabase
+// user (see conversation/anonymousAuth.ts); use that session's access token
+// so calls are authenticated exactly like any other user's.
 export function createClientForSession(accessToken: string) {
   const baseUrl = process.env.INTERNAL_API_BASE_URL || `http://localhost:${process.env.PORT || 3000}`
-  return createClient(baseUrl, () => `Bearer ${accessToken}`)
+  return createClient(baseUrl, () => ({ Authorization: `Bearer ${accessToken}` }))
+}
+
+// Used only when a session's own anonymous access token can no longer be
+// refreshed (typically because the listing was claimed and the claimer's
+// browser rotated the stored refresh token away) but the caller has already
+// verified via the DB that this exact userId still owns the property being
+// acted on — see plugins/auth.ts's internal-trust branch and
+// conversation/orchestrator.ts's update_property_price handling. Requires
+// INTERNAL_API_KEY, the same secret routes/internal/conversations.ts already
+// uses for backend-to-backend calls — never distributed to any client.
+export function createInternalClientForUser(userId: string) {
+  const baseUrl = process.env.INTERNAL_API_BASE_URL || `http://localhost:${process.env.PORT || 3000}`
+  const internalKey = process.env.INTERNAL_API_KEY
+  if (!internalKey) throw new Error('INTERNAL_API_KEY not configured — cannot act on behalf of a claimed user')
+  return createClient(baseUrl, () => ({ 'X-Internal-Api-Key': internalKey, 'X-Internal-User-Id': userId }))
 }

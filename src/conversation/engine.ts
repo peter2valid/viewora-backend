@@ -129,6 +129,22 @@ function parsePrice(raw: string): number | null {
 
 const AMENITIES_PROMPT = 'Any amenities? e.g. "parking, security, wifi", or reply "skip".'
 
+// Recognizes a narrow, explicit set of price-change phrasings sent to an
+// already-completed conversation — e.g. "change the price to 130000",
+// "update price to 12,500,000", "price is 200000". This is deliberately
+// narrow rather than general free-text parsing: anything that doesn't
+// match this shape falls through to the existing "a completed session
+// restarts fresh" behavior just below, which is the safe default for
+// anything ambiguous — see VIEWORA_2_PRODUCT_SPEC and
+// VIEWORA_ARCHITECTURE_AUDIT.md Journey 7 for why this one command exists
+// at all rather than a general edit-anything parser.
+const PRICE_CHANGE_PATTERN = /\bprice\b[^\d]*(\d[\d,]*)/i
+function parsePriceChangeCommand(text: string): number | null {
+  const match = text.match(PRICE_CHANGE_PATTERN)
+  if (!match) return null
+  return parsePrice(match[1])
+}
+
 function unchanged(state: SessionState, context: SessionContext, actions: EngineAction[]): EngineResult {
   return { nextState: state, nextContext: context, actions }
 }
@@ -149,6 +165,24 @@ export function step(
   // still advanced past it). Without this, a transient failure partway
   // through leaves someone permanently stuck with no way back to the menu.
   if (text && RESTART_KEYWORDS.has(text.trim().toLowerCase())) return freshMenu()
+
+  // A completed listing's creator can send one narrow follow-up command —
+  // a price change — without it being swallowed by the "completed sessions
+  // restart fresh" rule below. Anything else typed after completion still
+  // falls through to that rule unchanged.
+  if (state === 'completed' && context.propertyId) {
+    const newPrice = text ? parsePriceChangeCommand(text) : null
+    if (newPrice !== null) {
+      return {
+        nextState: 'completed',
+        nextContext: context,
+        actions: [
+          { kind: 'update_property_price', propertyId: context.propertyId, price: newPrice },
+          { kind: 'reply', text: `Updated — new price is KES ${newPrice.toLocaleString('en-US')}.` },
+        ],
+      }
+    }
+  }
 
   // 'completed' sessions restart fresh on the next message rather than
   // staying stuck — treat exactly like a brand new conversation.
