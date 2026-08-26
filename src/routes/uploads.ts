@@ -41,6 +41,17 @@ const createSignedUrlBodySchema = z.object({
   }
 })
 
+const reorderBodySchema = z.object({
+  propertyId: z.string().uuid(),
+  // Full ordered list of gallery_image media ids for this property — the
+  // frontend sends the array in its new order after a drag-and-drop, and
+  // sort_order is rewritten to match array position. Simpler and less
+  // error-prone than a single from/to-index move endpoint, and the gallery
+  // sizes this applies to (a handful to a few dozen photos) make sending
+  // the whole list on every reorder cheap.
+  orderedIds: z.array(z.string().uuid()).min(1).max(200),
+})
+
 const completeUploadBodySchema = z.object({
   spaceId: z.string().uuid().optional(),
   propertyId: z.string().uuid().optional(),
@@ -439,6 +450,97 @@ export default async function (fastify: FastifyInstance) {
     scheduleMediaProcessing(fastify, media.id, media.property_id, userId, media.storage_key)
 
     return reply.send({ mediaId: media.id, status: 'pending' })
+  })
+
+  // SET COVER PHOTO
+  // Scoped to media_type = 'gallery_image' to match how is_primary/sort_order
+  // are actually consumed (routes/public.ts's gallery query, utils/listingMapper.ts's
+  // cover-image pick) — a property's panorama/thumbnail rows have their own,
+  // unrelated is_primary semantics and must not be touched by this.
+  fastify.patch('/:id/set-cover', async (request, reply) => {
+    const user = request.user as any
+    const userId = user.sub
+    const params = parseWithSchema(reply, idParamsSchema, request.params)
+    if (!params) return
+
+    const { data: media, error: fetchErr } = await fastify.supabase
+      .from('property_media')
+      .select('id, media_type, property_id, properties!inner(user_id)')
+      .eq('id', params.id)
+      .eq('properties.user_id', userId)
+      .single()
+
+    if (fetchErr || !media) {
+      return reply.code(404).send({ statusMessage: 'Photo not found or unauthorized' })
+    }
+    if (media.media_type !== 'gallery_image') {
+      return reply.code(400).send({ statusMessage: 'Only gallery photos can be set as the cover image' })
+    }
+
+    // Demote every other gallery photo on this property first, so there's
+    // never a moment (or a failure between two updates) where two rows are
+    // both is_primary — order matters here, not just tidiness.
+    const { error: demoteErr } = await fastify.supabase
+      .from('property_media')
+      .update({ is_primary: false })
+      .eq('property_id', media.property_id)
+      .eq('media_type', 'gallery_image')
+      .neq('id', params.id)
+    if (demoteErr) {
+      fastify.log.error(demoteErr)
+      return reply.code(500).send({ statusMessage: 'Failed to update cover photo' })
+    }
+
+    const { error: promoteErr } = await fastify.supabase
+      .from('property_media')
+      .update({ is_primary: true })
+      .eq('id', params.id)
+    if (promoteErr) {
+      fastify.log.error(promoteErr)
+      return reply.code(500).send({ statusMessage: 'Failed to update cover photo' })
+    }
+
+    return reply.send({ ok: true })
+  })
+
+  // REORDER GALLERY PHOTOS
+  fastify.patch('/reorder', async (request, reply) => {
+    const user = request.user as any
+    const userId = user.sub
+    const body = parseWithSchema(reply, reorderBodySchema, request.body)
+    if (!body) return
+
+    const { data: space, error: spaceErr } = await fastify.supabase
+      .from('properties')
+      .select('id')
+      .eq('id', body.propertyId)
+      .eq('user_id', userId)
+      .single()
+    if (spaceErr || !space) {
+      return reply.code(403).send({ statusMessage: 'Unauthorized' })
+    }
+
+    // Scoping every update by property_id AND media_type prevents an id
+    // belonging to someone else's media (or this property's panorama/
+    // thumbnail rows) from having its sort_order silently rewritten by a
+    // client that passed an id it doesn't actually own a photo for.
+    const results = await Promise.all(
+      body.orderedIds.map((id, index) =>
+        fastify.supabase
+          .from('property_media')
+          .update({ sort_order: index })
+          .eq('id', id)
+          .eq('property_id', body.propertyId)
+          .eq('media_type', 'gallery_image'),
+      ),
+    )
+    const failed = results.find((r) => r.error)
+    if (failed) {
+      fastify.log.error(failed.error)
+      return reply.code(500).send({ statusMessage: 'Failed to save photo order' })
+    }
+
+    return reply.send({ ok: true })
   })
 
   // DELETE MEDIA
