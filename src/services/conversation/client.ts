@@ -14,6 +14,7 @@ type CreatePropertyBody = {
   amenities?: string[]
   slug?: string | null
   client_generated_id?: string
+  created_via?: 'web' | 'telegram' | 'whatsapp'
 }
 
 type SignedUrlRequest = {

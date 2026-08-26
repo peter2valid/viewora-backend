@@ -36,6 +36,7 @@ import whatsappRoutes from './routes/whatsapp.js'
 import telegramRoutes from './routes/telegram.js'
 import internalConversationsRoutes from './routes/internal/conversations.js'
 import savedRoutes from './routes/saved.js'
+import claimRoutes from './routes/claim.js'
 import { createUploadQueue } from './queues/upload.queue.js'
 import type { Queue } from 'bullmq'
 import { getMetrics } from './utils/metrics.js'
@@ -384,6 +385,7 @@ fastify.register(whatsappRoutes, { prefix: '/whatsapp' })
 fastify.register(telegramRoutes, { prefix: '/telegram' })
 fastify.register(internalConversationsRoutes, { prefix: '/internal/conversations' })
 fastify.register(savedRoutes, { prefix: '/saved' })
+fastify.register(claimRoutes, { prefix: '/claim' })
 process.stdout.write('✅ All plugins and routes registered\n')
 
 // Alias for /plans (used by frontend dashboard) to avoid 404

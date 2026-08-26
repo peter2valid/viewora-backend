@@ -9,6 +9,7 @@ import { step } from './engine.js'
 import { ensureAnonymousIdentity } from './anonymousAuth.js'
 import { findOrCreateSession, saveSession, logEvent } from './repository.js'
 import { createClientForSession, ApiError } from '../services/conversation/client.js'
+import { generateClaimToken } from '../utils/claimTokens.js'
 import type { Channel, ConversationSession, IncomingMessage, SessionState } from './types.js'
 
 export interface FetchedMedia {
@@ -127,6 +128,7 @@ async function processMessage(
               vehicle_transmission: action.facts.vehicleTransmission,
               vehicle_fuel_type: action.facts.vehicleFuelType,
               amenities: action.amenities.length > 0 ? action.amenities : undefined,
+              created_via: channel,
             })
             nextContext = { ...nextContext, propertyId: created.id, slug: created.slug ?? created.id }
           } catch (err) {
@@ -249,7 +251,28 @@ async function processMessage(
             // that wall — see the catch branch below for the honest reply.
             const published = await client.publishProperty(nextContext.propertyId, true)
             const slug = published.slug ?? nextContext.propertyId
-            text = `Your tour is ready: ${APP_URL}/p/${slug}\n\nProcessing runs in the background — give it a minute if photos aren't showing yet.`
+
+            // Attach a one-time claim token so opening this link can bridge
+            // this session's anonymous identity into the opener's browser
+            // (see VIEWORA_ARCHITECTURE_AUDIT.md §11/§23 and routes/claim.ts).
+            // Best-effort: a claim token is a bonus on top of the tour link,
+            // never a reason to withhold the link itself.
+            let claimSuffix = ''
+            try {
+              const { rawToken, tokenHash, expiresAt } = generateClaimToken()
+              const { error: claimErr } = await fastify.supabase.from('claim_tokens').insert({
+                token_hash: tokenHash,
+                conversation_session_id: session.id,
+                property_id: nextContext.propertyId,
+                expires_at: expiresAt,
+              })
+              if (claimErr) throw claimErr
+              claimSuffix = `?claim=${rawToken}`
+            } catch (err: any) {
+              fastify.log.warn({ err: err?.message, sessionId: session.id }, 'Failed to issue claim token — sending tour link without one')
+            }
+
+            text = `Your tour is ready: ${APP_URL}/p/${slug}${claimSuffix}\n\nProcessing runs in the background — give it a minute if photos aren't showing yet.`
           } catch (err) {
             if (!isUserFacingRejection(err)) throw err
             text = "Your photos are saved, but I can't make this into a public tour yet — that needs at least one 360° photo, and regular photos alone can't be published as a tour. Your property's been created either way; a 360° shot would complete it."

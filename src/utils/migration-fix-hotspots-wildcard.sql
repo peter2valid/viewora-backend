@@ -1,27 +1,40 @@
--- NOTE (2026-08-27): superseded by migration-fix-hotspots-wildcard.sql, which
--- takes this file's fix as its base and additionally replaces the hotspots.*
--- wildcard left open below with a verified explicit column list. Run that file
--- instead of this one if applying from scratch; this file is kept for history.
+-- Closes the one item migration-fix-public-tour-leak.sql left open on purpose:
+-- get_tour_data()'s scenes[].hotspots was still built with `row_to_json(h.*)`,
+-- an unbounded wildcard against the `hotspots` table, returned to ANY anonymous
+-- caller of GET /p/:slug. That file's own comment explained why it wasn't fixed
+-- at the time: no column list had been verified against every real consumer,
+-- and guessing wrong risks silently breaking hotspot rendering in production.
 --
--- Fixes a real data leak in the public tour RPC: get_tour_data() built its
--- 'space' object with `SELECT p.*` on the properties table, so ANY column
--- ever added to properties — including user_id, the owner's Supabase auth
--- id — was returned wholesale to any anonymous caller of GET /p/:slug.
+-- This migration does that verification instead of guessing:
+--   - routes/hotspots.ts (POST /scenes/:sceneId/hotspots) only ever inserts
+--     { scene_id, type, yaw, pitch, label, target_scene_id, content } — the
+--     exact shape of CreateHotspotBodySchema/UpdateHotspotBodySchema (zod).
+--   - Viewora/domain/hotspot/index.ts's `Hotspot` interface (the actual
+--     frontend/viewer consumer type) only reads fields that live in that same
+--     set: id, yaw, pitch, type, label, target_scene_id, plus content's
+--     sub-fields (text, url, icon, scale, hoverScale, strokeScale, corners,
+--     image_url, button_label) — nothing outside `content` is read besides
+--     those top-level columns.
+--   - created_at is used for ORDER BY in this RPC and in the authenticated
+--     GET /scenes/:sceneId/hotspots list route, so it's kept for ordering
+--     even though the frontend type doesn't surface it.
+-- There is no owner/user/email/phone/internal column on `hotspots` at all —
+-- confirmed by the insert path above, which is the only way rows are ever
+-- created. So this fix is forward-looking hardening (a column added to
+-- `hotspots` later won't be exposed by accident), not a fix for an active
+-- leak of sensitive data today.
 --
--- No public UI (Viewora/pages/view/p/[slug].vue, Viewora/pages/p/[slug].vue,
--- components/viewer/PsvViewer.vue) ever reads user_id, is_published,
--- visibility, published_at, location_lat/lng, lead_form_enabled, or
--- floorplan_url — those are dropped. Every other column below is a
--- confirmed real usage, checked against the actual frontend call sites.
+-- This also re-bases on migration-fix-public-tour-leak.sql's version of the
+-- function (the one with the full properties/scenes column lists, including
+-- the later tile_medium_*/ktx2 fields) rather than the older, since-diverged
+-- fix-get-tour-data-rpc.sql, which had regressed 'space' back to a bare
+-- `p.*` wildcard while adding the base tile fields. fix-get-tour-data-rpc.sql
+-- should be treated as superseded/historical — do not reapply it after this
+-- file, or the properties leak fix will be undone.
 --
--- property_360_settings.* is tightened the same way, matching the exact
--- explicit column list routes/spaces.ts already uses for the owner-facing
--- editor (GET /spaces/:id) — it's the same pattern, same file, so fixed here
--- too rather than left half-done. The hotspots.* wildcard is intentionally
--- left as-is: there's no evidence it carries anything sensitive (the owner's
--- own editor route also selects hotspots with '*'), and guessing an explicit
--- column list without verifying every field the PSV hotspot renderer
--- consumes risks silently breaking hotspot rendering in production.
+-- IMPORTANT: like every other migration in this folder, this is not applied
+-- automatically. Run this file's CREATE OR REPLACE FUNCTION body against the
+-- Supabase project via the SQL editor (or psql) to take effect.
 
 CREATE OR REPLACE FUNCTION public.get_tour_data(p_slug text)
  RETURNS jsonb
@@ -93,7 +106,17 @@ BEGIN
           'tile_medium_rows',            s.tile_medium_rows,
           'tile_medium_ktx2_manifest_url', s.tile_medium_ktx2_manifest_url,
           'hotspots', (
-            SELECT jsonb_agg(row_to_json(h.*) ORDER BY h.created_at ASC)
+            SELECT jsonb_agg(
+              jsonb_build_object(
+                'id',              h.id,
+                'type',            h.type,
+                'yaw',             h.yaw,
+                'pitch',           h.pitch,
+                'label',           h.label,
+                'target_scene_id', h.target_scene_id,
+                'content',         h.content
+              ) ORDER BY h.created_at ASC
+            )
             FROM hotspots h
             WHERE h.scene_id = s.id
           )

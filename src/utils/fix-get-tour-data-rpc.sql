@@ -1,3 +1,15 @@
+-- SUPERSEDED — DO NOT RUN (2026-08-27). This version's 'space' object uses a bare
+-- `p.*` wildcard on properties, which is the exact data leak (owner user_id and
+-- other private columns exposed to anonymous GET /p/:slug callers) that was later
+-- fixed in migration-fix-public-tour-leak.sql, and it's also missing the
+-- tile_medium_*/ktx2 scene fields and explicit hotspots column list added since.
+-- Running this file after either of those would silently re-open the leak.
+-- The current, correct definition is in migration-fix-hotspots-wildcard.sql
+-- (which supersedes migration-fix-public-tour-leak.sql in turn). Kept here for
+-- historical reference only.
+--
+-- Original comment, describing tile-field work that IS still reflected in the
+-- current version above:
 -- Updates get_tour_data to include tile fields needed by the PSV tiled adapter.
 -- Without tile_cols/tile_rows/tiles_ready/width/height the public viewer always
 -- falls back to the raw panorama instead of using the tiled format.

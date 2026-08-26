@@ -60,6 +60,10 @@ const createSpaceBodySchema = z.object({
   description: z.string().max(2000).optional(),
   location_text: z.string().max(200).optional(),
   slug: slugSchema.optional(),
+  // Set explicitly by conversation/orchestrator.ts for bot-created listings;
+  // omitted (defaults to 'web') by the web editor's existing create call —
+  // no frontend change needed to keep working correctly.
+  created_via: z.enum(['web', 'telegram', 'whatsapp']).optional(),
   ...listingFactsSchema,
 })
 
@@ -123,7 +127,7 @@ export default async function (fastify: FastifyInstance) {
 
     const { data, error, count } = await fastify.supabase
       .from('properties')
-      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, created_at, updated_at', { count: 'exact' })
+      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, claim_state, created_via, created_at, updated_at', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -156,6 +160,7 @@ export default async function (fastify: FastifyInstance) {
         logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, published_at,
         visibility, lead_form_enabled, branding_enabled,
         cta_enabled, cta_button_text, cta_action, cta_destination,
+        claim_state, created_via,
         created_at, updated_at,
         property_media (id, media_type, storage_key, public_url, width, height, file_size_bytes, sort_order, is_primary, processing_status, processed_at, processing_error, created_at, updated_at),
         property_360_settings (id, panorama_media_id, hfov_default, pitch_default, yaw_default, auto_rotate_enabled, hotspots_json)
@@ -219,6 +224,13 @@ export default async function (fastify: FastifyInstance) {
         land_acres: body.land_acres,
         land_type: body.land_type,
         amenities: body.amenities,
+        created_via: body.created_via ?? 'web',
+        // Anonymous sessions (both the web claim flow and every bot
+        // conversation — see conversation/anonymousAuth.ts) are the only
+        // creators who don't yet have a real, non-anonymous account behind
+        // this listing. A normal logged-in user's listing is 'claimed' from
+        // the moment it's created, since there's nothing left to claim.
+        claim_state: user.is_anonymous ? 'unclaimed' : 'claimed',
       })
       .select()
       .single()
