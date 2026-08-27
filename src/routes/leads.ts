@@ -12,13 +12,14 @@ const leadBodySchema = z.object({
   email: z.string().trim().email().max(254).optional(),
   phone: z.string().trim().max(20).optional(),
   message: z.string().max(1000).optional(),
-  source: z.enum(['direct', 'qr', 'embed', 'hotspot', 'whatsapp']).optional(),
+  source: z.enum(['direct', 'qr', 'embed', 'hotspot', 'whatsapp', 'call']).optional(),
 }).superRefine((data, ctx) => {
   if (!data.spaceId && !data.propertyId) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'spaceId or propertyId is required', path: ['spaceId'] })
   }
-  // WhatsApp click leads only need the space ID — name/email come later via the chat
-  if (data.source !== 'whatsapp') {
+  // WhatsApp/Call click leads only need the space ID — they're a raw contact
+  // button, not a filled-out form, so there's no name/email to require yet.
+  if (data.source !== 'whatsapp' && data.source !== 'call') {
     if (!data.name?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Name is required', path: ['name'] })
     if (!data.email?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Email is required', path: ['email'] })
   }
@@ -49,13 +50,15 @@ export default async function (fastify: FastifyInstance) {
     const { spaceId, propertyId, name, email, phone, message, source } = body
     const finalId = spaceId || propertyId
     const isWhatsapp = source === 'whatsapp'
-    const cleanName = sanitizeLeadText(name || (isWhatsapp ? 'WhatsApp Inquiry' : ''), 100)
+    const isCall = source === 'call'
+    const isClickOnly = isWhatsapp || isCall
+    const cleanName = sanitizeLeadText(name || (isWhatsapp ? 'WhatsApp Inquiry' : isCall ? 'Phone Call Inquiry' : ''), 100)
     const cleanEmail = email ? email.trim().toLowerCase().slice(0, 254) : null
     const cleanPhone = sanitizeLeadPhone(phone)
     const cleanMessage = message ? sanitizeLeadText(message, 1000) : null
 
-    // Verify space is published. WhatsApp clicks bypass lead_form_enabled —
-    // the contact button is available regardless of lead capture plan.
+    // Verify space is published. WhatsApp/Call clicks bypass lead_form_enabled —
+    // the contact buttons are available regardless of lead capture plan.
     const { data: space, error: spaceErr } = await fastify.supabase
       .from('properties')
       .select('id, is_published, lead_form_enabled')
@@ -68,7 +71,7 @@ export default async function (fastify: FastifyInstance) {
     if (!space.is_published) {
       return reply.code(403).send({ statusMessage: 'This tour is not published' })
     }
-    if (!isWhatsapp && !space.lead_form_enabled) {
+    if (!isClickOnly && !space.lead_form_enabled) {
       return reply.code(403).send({ statusMessage: 'Lead capture is disabled for this tour' })
     }
 
