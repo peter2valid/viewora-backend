@@ -310,12 +310,12 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       // the tour cache to expire to see it reflected. get_tour_data()'s
       // 'space' object deliberately never includes user_id (see
       // migration-fix-public-tour-leak.sql) so it's looked up here instead,
-      // never handed to the client directly — only these three public-safe
+      // never handed to the client directly — only these public-safe
       // profile fields are. No "Verified" or license fields: Viewora has no
       // verification/brokerage-licensing system to back them honestly.
       const { data: ownerRow } = await fastify.supabase
         .from('properties')
-        .select('profiles:profiles!properties_user_id_fkey ( id, full_name, avatar_url, bio )')
+        .select('profiles:profiles!properties_user_id_fkey ( id, full_name, avatar_url, bio, company_name )')
         .eq('id', data.space.id)
         .maybeSingle()
       data.seller = (ownerRow as any)?.profiles ?? null
