@@ -127,7 +127,7 @@ export default async function (fastify: FastifyInstance) {
 
     const { data, error, count } = await fastify.supabase
       .from('properties')
-      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, claim_state, created_via, created_at, updated_at', { count: 'exact' })
+      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, claim_state, created_via, created_at, updated_at, scenes ( thumbnail_url, order_index ), property_media ( public_url, media_type, sort_order, is_primary, processing_status )', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -136,11 +136,30 @@ export default async function (fastify: FastifyInstance) {
       return reply.code(500).send({ statusMessage: 'Failed to fetch spaces' })
     }
 
-    const mappedData = (data || []).map(d => ({
-      ...d,
-      space_type: d.property_type,
-      property_type: undefined
-    }))
+    // The Tours dashboard card needs a thumbnail even for gallery-only
+    // listings — cover_image_url on the row is only ever written by the
+    // 360 tile pipeline (tile-processor.ts), so a flat-photo listing has it
+    // null forever otherwise. Same fallback chain as listingMapper.ts's
+    // public-facing mapRow: scene thumbnail, then first processed gallery
+    // photo, then the raw column.
+    const mappedData = (data || []).map((d: any) => {
+      const sceneThumb = (d.scenes || [])
+        .filter((s: any) => s.thumbnail_url)
+        .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0))[0]?.thumbnail_url
+
+      const galleryPhoto = (d.property_media || [])
+        .filter((m: any) => m.media_type === 'gallery_image' && m.processing_status === 'complete' && m.public_url)
+        .sort((a: any, b: any) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0) || (a.sort_order ?? 0) - (b.sort_order ?? 0))[0]?.public_url
+
+      return {
+        ...d,
+        space_type: d.property_type,
+        property_type: undefined,
+        cover_image_url: sceneThumb || galleryPhoto || d.cover_image_url || null,
+        scenes: undefined,
+        property_media: undefined,
+      }
+    })
 
     return reply.send({ data: mappedData, total: count ?? 0, page, limit })
   })
