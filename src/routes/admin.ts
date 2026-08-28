@@ -962,6 +962,63 @@ export default async function (fastify: FastifyInstance) {
     }
   })
 
+  // ── PROPERTY REPORTS ───────────────────────────────────────────────────────
+  // §13.3 Report Button — buyer-submitted flags (POST /reports, public,
+  // routes/reports.ts). Deliberately not auto-actioned: an admin reviews
+  // here and unpublishes via the existing PATCH /admin/spaces/:id if the
+  // report is legitimate, rather than a single report silently hiding a
+  // listing (a report-bombing vector against a competitor otherwise).
+  fastify.get('/reports', async (request, reply) => {
+    try {
+      const { page = '1', limit = '25', status = '' } = request.query as any
+      const pageNum = Math.max(1, parseInt(page))
+      const limitNum = Math.min(100, parseInt(limit))
+      const from = (pageNum - 1) * limitNum
+      const to = from + limitNum - 1
+
+      let query = fastify.supabase
+        .from('property_reports')
+        .select('*, properties(id, title, slug, is_published, profiles!properties_user_id_fkey(email, full_name))', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to)
+
+      if (status) query = query.eq('status', status)
+
+      const { data, count, error } = await query
+      if (error) throw error
+      return reply.send({ success: true, data: { reports: data, total: count, page: pageNum, limit: limitNum } })
+    } catch {
+      return reply.code(500).send({ statusMessage: 'Failed to fetch reports' })
+    }
+  })
+
+  fastify.patch('/reports/:id', async (request, reply) => {
+    try {
+      const { id } = request.params as any
+      const { status } = request.body as any
+      const allowed = ['pending', 'reviewed', 'dismissed']
+      if (!allowed.includes(status)) return reply.code(400).send({ statusMessage: 'Invalid status' })
+      const { data, error } = await fastify.supabase
+        .from('property_reports').update({ status }).eq('id', id).select('id, status').single()
+      if (error) throw error
+      await auditLog(fastify, request, 'update_report_status', 'property_report', id, { status })
+      return reply.send({ success: true, data })
+    } catch {
+      return reply.code(500).send({ statusMessage: 'Failed to update report' })
+    }
+  })
+
+  fastify.delete('/reports/:id', async (request, reply) => {
+    try {
+      const { id } = request.params as any
+      await fastify.supabase.from('property_reports').delete().eq('id', id)
+      await auditLog(fastify, request, 'delete_report', 'property_report', id)
+      return reply.send({ success: true, data: { deleted: true } })
+    } catch {
+      return reply.code(500).send({ statusMessage: 'Failed to delete report' })
+    }
+  })
+
   // ── CAPTURE REQUESTS ───────────────────────────────────────────────────────
 
   fastify.get('/capture-requests', async (request, reply) => {

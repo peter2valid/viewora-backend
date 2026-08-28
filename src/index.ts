@@ -19,6 +19,7 @@ import spaceRoutes from './routes/spaces.js'
 import billingRoutes from './routes/billing.js'
 import uploadsRoutes from './routes/uploads.js'
 import leadsRoutes from './routes/leads.js'
+import reportsRoutes from './routes/reports.js'
 import analyticsRoutes from './routes/analytics.js'
 import dashboardRoutes from './routes/dashboard.js'
 import profileRoutes from './routes/profile.js'
@@ -368,6 +369,7 @@ fastify.register(spaceRoutes, { prefix: '/spaces' })
 fastify.register(billingRoutes, { prefix: '/billing' })
 fastify.register(uploadsRoutes, { prefix: '/uploads' })
 fastify.register(leadsRoutes, { prefix: '/leads' })
+fastify.register(reportsRoutes, { prefix: '/reports' })
 fastify.register(analyticsRoutes, { prefix: '/analytics' })
 fastify.register(dashboardRoutes, { prefix: '/dashboard' })
 fastify.register(profileRoutes, { prefix: '/profile' })
