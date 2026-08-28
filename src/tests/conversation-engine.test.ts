@@ -178,6 +178,28 @@ test('"skip" works on description, facts, and amenities prompts', () => {
   assert.deepEqual(createAction.amenities, [])
 })
 
+test('"skip all" jumps straight from the description prompt to photos in one step', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyTitle: 'Studio Colaba', location: 'Colaba', price: 3_000_000 }
+  const r = step('active', context, textMessage('skip all'))
+  assert.equal(r.nextState, 'awaiting_media')
+  const createAction = r.actions.find((a) => a.kind === 'create_property')
+  assert.ok(createAction && createAction.kind === 'create_property')
+  assert.equal(createAction.description, '')
+  assert.deepEqual(createAction.facts, {})
+  assert.deepEqual(createAction.amenities, [])
+})
+
+test('"skip all" also works from the facts prompt (after description was already answered)', () => {
+  const context: SessionContext = { spaceType: 'residential', propertyTitle: 'Studio Colaba', location: 'Colaba', price: 3_000_000, description: 'Bright and airy' }
+  const r = step('active', context, textMessage('skip_all'))
+  assert.equal(r.nextState, 'awaiting_media')
+  const createAction = r.actions.find((a) => a.kind === 'create_property')
+  assert.ok(createAction && createAction.kind === 'create_property')
+  assert.equal(createAction.description, 'Bright and airy')
+  assert.deepEqual(createAction.facts, {})
+  assert.deepEqual(createAction.amenities, [])
+})
+
 test('price must be a positive number; non-numeric input is rejected without advancing', () => {
   const context: SessionContext = { spaceType: 'residential', propertyTitle: 'X', location: 'Kilimani' }
   const r = step('active', context, textMessage('expensive'))

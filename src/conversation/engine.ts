@@ -47,6 +47,14 @@ const MENU_BUTTONS: ReplyButton[] = [
 
 const RESTART_HINT = '(You can send "restart" anytime to start over.)'
 const SKIP_BUTTON: ReplyButton[] = [{ label: 'Skip', value: 'skip' }]
+// Offered alongside the single-field Skip on the FIRST optional prompt
+// (description) — lets someone who wants the fastest possible path to a
+// tour link skip description, facts, AND amenities in one tap instead of
+// three separate ones. Not offered again at the facts/amenities prompts:
+// by then there's at most one field left to skip, so the plain Skip button
+// already is the fast path.
+const SKIP_ALL_KEYWORDS = new Set(['skip_all', 'skip all', 'skip to photos'])
+const SKIP_TO_PHOTOS_BUTTON: ReplyButton = { label: '⏩ Skip to photos', value: 'skip_all' }
 
 const TYPE_CHOICES: Record<string, SpaceType> = {
   '1': 'residential',
@@ -82,9 +90,9 @@ function factsNeededFor(spaceType: SpaceType): boolean {
 
 function factsPrompt(spaceType: SpaceType): string {
   if (spaceType === 'residential') {
-    return 'Bedrooms, bathrooms, and area? e.g. "4, 3, 220" for 4 bed / 3 bath / 220 m², or reply "skip".'
+    return 'Bedrooms, bathrooms, and area? e.g. "4, 3, 220" for 4 bed / 3 bath / 220 m², reply "skip", or "skip all" to jump straight to photos.'
   }
-  return 'Year, mileage (km), transmission, and fuel type? e.g. "2019, 45000, automatic, petrol", or reply "skip".'
+  return 'Year, mileage (km), transmission, and fuel type? e.g. "2019, 45000, automatic, petrol", reply "skip", or "skip all" to jump straight to photos.'
 }
 
 function factsErrorPrompt(spaceType: SpaceType): string {
@@ -203,6 +211,39 @@ export function step(
   if (state === 'new' || state === 'completed' || state === 'abandoned') return freshMenu()
 
   if (state === 'active') {
+    // Fast path: once name/location/price (the only required fields) are
+    // in, description/facts/amenities are all optional — this lets someone
+    // skip straight to photos in one tap instead of answering (or
+    // dismissing) each of the three individually.
+    if (
+      context.spaceType !== undefined &&
+      context.propertyTitle !== undefined &&
+      context.location !== undefined &&
+      context.price !== undefined &&
+      context.amenities === undefined &&
+      text &&
+      SKIP_ALL_KEYWORDS.has(text.trim().toLowerCase())
+    ) {
+      const facts = context.facts ?? {}
+      return {
+        nextState: 'awaiting_media',
+        nextContext: { ...context, description: context.description ?? '', factsAsked: true, facts, amenities: [] },
+        actions: [
+          {
+            kind: 'create_property',
+            title: context.propertyTitle,
+            spaceType: context.spaceType,
+            description: context.description ?? '',
+            location: context.location,
+            price: context.price,
+            facts,
+            amenities: [],
+          },
+          { kind: 'reply', text: 'Now send me your photos, one at a time. Type "done" when you\'re finished.' },
+        ],
+      }
+    }
+
     if (!context.spaceType) {
       const spaceType = text ? parseSpaceType(text) : null
       if (!spaceType) {
@@ -248,7 +289,11 @@ export function step(
         ])
       }
       return unchanged('active', { ...context, price }, [
-        { kind: 'reply', text: 'Want to add a description? Send it as text, or reply "skip".', buttons: SKIP_BUTTON },
+        {
+          kind: 'reply',
+          text: 'Want to add a description? Send it as text, reply "skip", or reply "skip all" to jump straight to photos.',
+          buttons: [...SKIP_BUTTON, SKIP_TO_PHOTOS_BUTTON],
+        },
       ])
     }
 
@@ -265,7 +310,7 @@ export function step(
         ])
       }
       return unchanged('active', nextContext, [
-        { kind: 'reply', text: factsPrompt(context.spaceType), buttons: SKIP_BUTTON },
+        { kind: 'reply', text: factsPrompt(context.spaceType), buttons: [...SKIP_BUTTON, SKIP_TO_PHOTOS_BUTTON] },
       ])
     }
 
