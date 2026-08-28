@@ -16,6 +16,14 @@ export interface FetchedMedia {
   buffer: Buffer
   contentType: string
   fileName: string
+  // Telegram reports each photo's dimensions directly in the webhook update
+  // (normalizer.ts puts them on IncomingMessage.payload), so its fetchMedia
+  // leaves these undefined. WhatsApp's webhook never includes image
+  // dimensions at all — its fetchMedia sniffs them from the downloaded bytes
+  // instead and returns them here, which the store_photo case below falls
+  // back to when the payload didn't already have them.
+  width?: number
+  height?: number
 }
 
 export interface OrchestratorDeps {
@@ -160,18 +168,22 @@ async function processMessage(
           if (!nextContext.propertyId) throw new Error('store_photo: no propertyId — property creation likely failed earlier this turn')
           const client = createClientForSession(accessToken)
 
-          // A real equirectangular panorama is ~2:1 (e.g. 11904x5952) —
-          // an ordinary phone photo never is. Telegram reports each photo's
-          // width/height directly (normalizer.ts), so this needs no image
-          // decoding — just the aspect ratio the provider already gave us.
-          // Below ~1.8 is comfortably outside normal landscape/portrait photo
+          // A real equirectangular panorama is ~2:1 (e.g. 11904x5952) — an
+          // ordinary phone photo never is. Telegram reports each photo's
+          // width/height directly in the webhook payload (normalizer.ts);
+          // WhatsApp never does, so its fetchMedia sniffs dimensions from
+          // the downloaded bytes instead (see FetchedMedia above) — either
+          // source is fine here, whichever one actually has a value. Below
+          // ~1.8 is comfortably outside normal landscape/portrait photo
           // ratios (4:3, 3:2, 16:9) while still tolerant of slightly-off panoramas.
-          const dims = 'width' in message.payload ? message.payload : null
-          const isPanorama = !!(dims?.width && dims?.height && dims.width / dims.height >= 1.8)
-          const mediaType = isPanorama ? 'panorama' : 'gallery'
+          const payloadDims = 'width' in message.payload ? message.payload : null
 
           try {
             const media = await deps.fetchMedia(message)
+            const width = payloadDims?.width ?? media.width
+            const height = payloadDims?.height ?? media.height
+            const isPanorama = !!(width && height && width / height >= 1.8)
+            const mediaType = isPanorama ? 'panorama' : 'gallery'
 
             const signed = await client.createSignedUrl({
               propertyId: nextContext.propertyId,
@@ -200,8 +212,8 @@ async function processMessage(
               objectKey: signed.objectKey,
               publicUrl: signed.publicUrl,
               fileSize: media.buffer.byteLength,
-              width: dims?.width,
-              height: dims?.height,
+              width,
+              height,
             })
 
             // property_media alone doesn't make this renderable — the
