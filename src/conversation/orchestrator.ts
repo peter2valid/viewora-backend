@@ -10,7 +10,7 @@ import { ensureAnonymousIdentity } from './anonymousAuth.js'
 import { findOrCreateSession, saveSession, logEvent } from './repository.js'
 import { createClientForSession, createInternalClientForUser, ApiError } from '../services/conversation/client.js'
 import { generateClaimToken } from '../utils/claimTokens.js'
-import type { Channel, ConversationSession, IncomingMessage, SessionState } from './types.js'
+import type { Channel, ConversationSession, IncomingMessage, ReplyButton, SessionState } from './types.js'
 
 export interface FetchedMedia {
   buffer: Buffer
@@ -27,7 +27,11 @@ export interface FetchedMedia {
 }
 
 export interface OrchestratorDeps {
-  sendReply: (to: string, text: string) => Promise<void>
+  // buttons is optional and purely a rendering hint — an Adapter that
+  // doesn't support them (or a channel where they're irrelevant) can just
+  // ignore the parameter; the reply text alone already makes sense on its
+  // own (see engine.ts's MENU_TEXT comment).
+  sendReply: (to: string, text: string, buttons?: ReplyButton[]) => Promise<void>
   fetchMedia: (message: IncomingMessage) => Promise<FetchedMedia>
 }
 
@@ -113,7 +117,7 @@ async function processMessage(
     actionLoop: for (const action of result.actions) {
       switch (action.kind) {
         case 'reply': {
-          await deps.sendReply(message.replyTo, action.text)
+          await deps.sendReply(message.replyTo, action.text, action.buttons)
           await logEvent(fastify, session.id, 'outbound', 'text', { text: action.text })
           break
         }

@@ -4,7 +4,7 @@
 // repo's existing @aws-sdk/client-s3 / axios usage elsewhere: reach for the
 // provider's raw HTTP API when it's this simple, not a framework.
 
-import type { IncomingMessage } from '../../conversation/types.js'
+import type { IncomingMessage, ReplyButton } from '../../conversation/types.js'
 
 export interface TelegramUpdate {
   update_id: number
@@ -15,6 +15,15 @@ export interface TelegramUpdate {
     from?: { id: number; first_name?: string; username?: string }
     text?: string
     photo?: Array<{ file_id: string; file_size?: number; width: number; height: number }>
+  }
+  // Sent when a user taps an inline keyboard button (see sendMessage's
+  // reply_markup below) instead of typing — a completely separate update
+  // shape from `message`, handled by normalizer.ts's callback_query branch.
+  callback_query?: {
+    id: string
+    from: { id: number; first_name?: string; username?: string }
+    message?: { chat: { id: number } }
+    data?: string
   }
 }
 
@@ -41,8 +50,21 @@ async function callApi<T>(method: string, body?: Record<string, unknown>): Promi
   return json.result
 }
 
-export async function sendMessage(chatId: string | number, text: string): Promise<void> {
-  await callApi('sendMessage', { chat_id: chatId, text })
+// One button per row — keeps labels fully readable rather than squeezing
+// several onto one line, and matches how few options the engine ever offers
+// at once (max 4, the space-type menu).
+export async function sendMessage(chatId: string | number, text: string, buttons?: ReplyButton[]): Promise<void> {
+  const reply_markup = buttons?.length
+    ? { inline_keyboard: buttons.map((b) => [{ text: b.label, callback_data: b.value }]) }
+    : undefined
+  await callApi('sendMessage', { chat_id: chatId, text, reply_markup })
+}
+
+// Telegram shows a spinner on the tapped button until this is called —
+// skipping it leaves every button looking stuck/broken after one tap even
+// though the message was actually processed fine.
+export async function answerCallbackQuery(callbackQueryId: string): Promise<void> {
+  await callApi('answerCallbackQuery', { callback_query_id: callbackQueryId })
 }
 
 export async function getUpdates(offset: number, timeoutSec: number): Promise<TelegramUpdate[]> {

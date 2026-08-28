@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { normalizeTelegramUpdate } from '../adapters/telegram/normalizer.js'
-import { sendMessage, fetchMedia, type TelegramUpdate } from '../adapters/telegram/client.js'
+import { sendMessage, fetchMedia, answerCallbackQuery, type TelegramUpdate } from '../adapters/telegram/client.js'
 import { handleIncomingMessage } from '../conversation/orchestrator.js'
 
 export default async function telegramRoutes(fastify: FastifyInstance) {
@@ -14,11 +14,15 @@ export default async function telegramRoutes(fastify: FastifyInstance) {
     reply.code(200).send({ received: true })
 
     const update = request.body as TelegramUpdate
+    // Clears the tapped button's loading spinner — doesn't need to block
+    // the rest of processing on it succeeding.
+    if (update.callback_query) answerCallbackQuery(update.callback_query.id).catch(() => {})
+
     const message = normalizeTelegramUpdate(update)
     if (!message) return
 
     handleIncomingMessage(fastify, 'telegram', message, {
-      sendReply: (to, text) => sendMessage(to, text),
+      sendReply: (to, text, buttons) => sendMessage(to, text, buttons),
       fetchMedia,
     }).catch((err) => {
       // The error message is inlined directly into the log string (not just

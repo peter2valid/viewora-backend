@@ -13,6 +13,7 @@ import type {
   EngineResult,
   IncomingMessage,
   ListingFacts,
+  ReplyButton,
   SessionContext,
   SessionState,
   SpaceType,
@@ -20,6 +21,9 @@ import type {
   VehicleTransmission,
 } from './types.js'
 
+// Keeps the numbered list even though buttons cover the same choices below —
+// a channel adapter that doesn't render buttons (or a WhatsApp reply typed
+// before the buttons are seen) still needs the text alone to make sense.
 const MENU_TEXT = [
   'Hi! I can turn your photos into a shareable 360° tour.',
   '',
@@ -29,10 +33,20 @@ const MENU_TEXT = [
   '3. Business / Institution',
   '4. Something else',
   '',
-  'Reply with a number to get started.',
+  'Tap a button below, or reply with a number.',
 ].join('\n')
 
+// Values match TYPE_CHOICES' keys below, so a tapped button is parsed
+// identically to someone typing "1" by hand — see ReplyButton's doc comment.
+const MENU_BUTTONS: ReplyButton[] = [
+  { label: '🏠 Property / Space', value: '1' },
+  { label: '🚗 Car / Vehicle', value: '2' },
+  { label: '🏢 Business / Institution', value: '3' },
+  { label: '✨ Something else', value: '4' },
+]
+
 const RESTART_HINT = '(You can send "restart" anytime to start over.)'
+const SKIP_BUTTON: ReplyButton[] = [{ label: 'Skip', value: 'skip' }]
 
 const TYPE_CHOICES: Record<string, SpaceType> = {
   '1': 'residential',
@@ -150,7 +164,7 @@ function unchanged(state: SessionState, context: SessionContext, actions: Engine
 }
 
 function freshMenu(): EngineResult {
-  return { nextState: 'active', nextContext: {}, actions: [{ kind: 'reply', text: MENU_TEXT }] }
+  return { nextState: 'active', nextContext: {}, actions: [{ kind: 'reply', text: MENU_TEXT, buttons: MENU_BUTTONS }] }
 }
 
 export function step(
@@ -234,7 +248,7 @@ export function step(
         ])
       }
       return unchanged('active', { ...context, price }, [
-        { kind: 'reply', text: 'Want to add a description? Send it as text, or reply "skip".' },
+        { kind: 'reply', text: 'Want to add a description? Send it as text, or reply "skip".', buttons: SKIP_BUTTON },
       ])
     }
 
@@ -247,18 +261,18 @@ export function step(
       // a message nothing needs an answer to.
       if (!factsNeededFor(context.spaceType)) {
         return unchanged('active', { ...nextContext, factsAsked: true, facts: {} }, [
-          { kind: 'reply', text: AMENITIES_PROMPT },
+          { kind: 'reply', text: AMENITIES_PROMPT, buttons: SKIP_BUTTON },
         ])
       }
       return unchanged('active', nextContext, [
-        { kind: 'reply', text: factsPrompt(context.spaceType) },
+        { kind: 'reply', text: factsPrompt(context.spaceType), buttons: SKIP_BUTTON },
       ])
     }
 
     if (!context.factsAsked) {
       if (text && text.trim().toLowerCase() === 'skip') {
         return unchanged('active', { ...context, factsAsked: true, facts: {} }, [
-          { kind: 'reply', text: AMENITIES_PROMPT },
+          { kind: 'reply', text: AMENITIES_PROMPT, buttons: SKIP_BUTTON },
         ])
       }
       const facts = text ? parseFacts(text, context.spaceType) : null

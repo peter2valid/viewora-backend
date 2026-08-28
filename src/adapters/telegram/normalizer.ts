@@ -6,6 +6,20 @@ import { largestPhoto } from './client.js'
 // Returns null for update types we don't handle yet (edited messages, etc.)
 // rather than guessing — the caller should just ack and move on.
 export function normalizeTelegramUpdate(update: TelegramUpdate): IncomingMessage | null {
+  const callback = update.callback_query
+  if (callback && callback.data && callback.message) {
+    return {
+      id: `telegram-${update.update_id}`,
+      channel: 'telegram',
+      providerEventId: String(update.update_id),
+      sender: { id: String(callback.from.id), displayName: callback.from.username ?? callback.from.first_name ?? null },
+      replyTo: String(callback.message.chat.id),
+      timestamp: new Date().toISOString(), // callback_query carries no timestamp of its own
+      type: 'button',
+      payload: { id: callback.id, text: callback.data },
+    }
+  }
+
   const message = update.message
   if (!message || !message.from) return null
 

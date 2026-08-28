@@ -105,8 +105,17 @@ export interface ConversationSession {
 // The engine only decides WHAT should happen — the Orchestrator already has
 // the original IncomingMessage in hand when it executes these, so actions
 // carry just enough to disambiguate intent, not duplicate message data.
+export interface ReplyButton {
+  label: string
+  // Echoed back as the 'button' IncomingMessage's payload.text when tapped
+  // (see textOf() in engine.ts) — same value a person would have typed by
+  // hand, so the engine's existing parsing (parseSpaceType, "skip", etc.)
+  // handles a button tap identically to free text, no separate code path.
+  value: string
+}
+
 export type EngineAction =
-  | { kind: 'reply'; text: string }
+  | { kind: 'reply'; text: string; buttons?: ReplyButton[] }
   | {
       kind: 'create_property'
       title: string
