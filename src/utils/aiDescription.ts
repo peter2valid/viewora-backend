@@ -19,6 +19,8 @@ type SpaceForDescription = {
   vehicle_fuel_type: string | null
   amenities: string[] | null
   listing_status: string | null
+  transaction_type: string | null
+  price_period: string | null
 }
 
 const MODEL = 'claude-haiku-4-5-20251001'
@@ -28,7 +30,11 @@ function buildFactLines(space: SpaceForDescription): string[] {
   lines.push(`Title: ${space.title || 'Untitled listing'}`)
   lines.push(`Type: ${space.property_type || 'property'}`)
   if (space.location_text) lines.push(`Location: ${space.location_text}`)
-  if (space.price_kes) lines.push(`Price: KES ${space.price_kes.toLocaleString('en-KE')}`)
+  if (space.transaction_type) lines.push(`Listed for: ${space.transaction_type === 'rent' ? 'Rent' : 'Sale'}`)
+  if (space.price_kes) {
+    const period = space.transaction_type === 'rent' && space.price_period ? ` per ${space.price_period}` : ''
+    lines.push(`Price: KES ${space.price_kes.toLocaleString('en-KE')}${period}`)
+  }
 
   if (space.property_type === 'residential') {
     if (space.bedrooms != null) lines.push(`Bedrooms: ${space.bedrooms}`)

@@ -5,6 +5,7 @@
 
 export const LISTING_SELECT_FRAGMENT = `
   id, slug, title, property_type, location_text, price_kes, listing_status,
+  transaction_type, price_period,
   bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km,
   vehicle_transmission, vehicle_fuel_type, amenities, phone, cover_image_url, created_at,
   scenes ( thumbnail_url, order_index ),
@@ -31,6 +32,8 @@ export function mapListingRow(row: any) {
     location_text: row.location_text,
     price_kes: row.price_kes,
     listing_status: row.listing_status,
+    transaction_type: row.transaction_type,
+    price_period: row.price_period,
     bedrooms: row.bedrooms,
     bathrooms: row.bathrooms,
     area_sqm: row.area_sqm,

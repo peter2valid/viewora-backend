@@ -42,6 +42,12 @@ const slugSchema = z.string().trim().min(3).max(120).regex(/^[a-z0-9-]+$/, 'Slug
 const listingFactsSchema = {
   price_kes: z.number().int().positive().max(999_999_999_999).optional(),
   listing_status: z.enum(['available', 'sold', 'rented']).optional(),
+  // Orthogonal to listing_status (which tracks current state) — this is the
+  // fundamental nature of the listing. Without it, a price alone is
+  // ambiguous (is KES 50,000 a sale price or monthly rent?). price_period
+  // only means anything when transaction_type is 'rent'.
+  transaction_type: z.enum(['sale', 'rent']).optional(),
+  price_period: z.enum(['day', 'week', 'month', 'year']).optional(),
   bedrooms: z.number().int().min(0).max(50).optional(),
   bathrooms: z.number().int().min(0).max(50).optional(),
   area_sqm: z.number().int().min(0).max(1_000_000).optional(),
@@ -127,7 +133,7 @@ export default async function (fastify: FastifyInstance) {
 
     const { data, error, count } = await fastify.supabase
       .from('properties')
-      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, claim_state, created_via, created_at, updated_at, scenes ( thumbnail_url, order_index ), property_media ( public_url, media_type, sort_order, is_primary, processing_status )', { count: 'exact' })
+      .select('id, title, slug, description, property_type, location_text, location_lat, location_lng, logo_url, floorplan_url, phone, email, cover_image_url, has_360, has_gallery, is_published, visibility, lead_form_enabled, branding_enabled, price_kes, listing_status, transaction_type, price_period, bedrooms, bathrooms, area_sqm, vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type, land_acres, land_type, amenities, view_count, claim_state, created_via, created_at, updated_at, scenes ( thumbnail_url, order_index ), property_media ( public_url, media_type, sort_order, is_primary, processing_status )', { count: 'exact' })
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .range(from, to)
@@ -180,6 +186,10 @@ export default async function (fastify: FastifyInstance) {
         visibility, lead_form_enabled, branding_enabled,
         cta_enabled, cta_button_text, cta_action, cta_destination,
         claim_state, created_via,
+        price_kes, listing_status, transaction_type, price_period,
+        bedrooms, bathrooms, area_sqm,
+        vehicle_year, vehicle_mileage_km, vehicle_transmission, vehicle_fuel_type,
+        land_acres, land_type, amenities,
         created_at, updated_at,
         property_media (id, media_type, storage_key, public_url, width, height, file_size_bytes, sort_order, is_primary, processing_status, processed_at, processing_error, created_at, updated_at),
         property_360_settings (id, panorama_media_id, hfov_default, pitch_default, yaw_default, auto_rotate_enabled, hotspots_json)
@@ -233,6 +243,8 @@ export default async function (fastify: FastifyInstance) {
         location_text: body.location_text || null,
         price_kes: body.price_kes,
         listing_status: body.listing_status,
+        transaction_type: body.transaction_type,
+        price_period: body.price_period,
         bedrooms: body.bedrooms,
         bathrooms: body.bathrooms,
         area_sqm: body.area_sqm,
@@ -311,6 +323,8 @@ export default async function (fastify: FastifyInstance) {
     if (body.slug !== undefined) updates.slug = body.slug
     if (body.price_kes !== undefined) updates.price_kes = body.price_kes
     if (body.listing_status !== undefined) updates.listing_status = body.listing_status
+    if (body.transaction_type !== undefined) updates.transaction_type = body.transaction_type
+    if (body.price_period !== undefined) updates.price_period = body.price_period
     if (body.bedrooms !== undefined) updates.bedrooms = body.bedrooms
     if (body.bathrooms !== undefined) updates.bathrooms = body.bathrooms
     if (body.area_sqm !== undefined) updates.area_sqm = body.area_sqm
@@ -758,6 +772,8 @@ export default async function (fastify: FastifyInstance) {
         vehicle_fuel_type: body.vehicle_fuel_type ?? null,
         amenities: body.amenities ?? null,
         listing_status: body.listing_status ?? null,
+        transaction_type: body.transaction_type ?? null,
+        price_period: body.price_period ?? null,
       }, apiKey)
       return reply.send({ description })
     } catch (err: any) {

@@ -16,6 +16,7 @@ const listingsQuerySchema = z.object({
   limit: z.string().optional(),
   type: z.enum(['all', 'residential', 'commercial', 'hospitality', 'education', 'automotive', 'other']).optional(),
   status: z.enum(['all', 'available', 'sold', 'rented']).optional(),
+  transaction: z.enum(['all', 'sale', 'rent']).optional(),
   sort: z.enum(['newest', 'price_asc', 'price_desc']).optional(),
   q: z.string().max(200).optional(),
   price_min: z.string().regex(/^\d+$/).optional(),
@@ -198,6 +199,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       builder = builder.in('id', idList)
     } else {
       if (query.type && query.type !== 'all') builder = builder.eq('property_type', query.type)
+      if (query.transaction && query.transaction !== 'all') builder = builder.eq('transaction_type', query.transaction)
       // Default to 'available' only — a buyer browsing the feed isn't looking
       // for sold/rented listings unless they explicitly ask to see everything.
       if (query.status && query.status !== 'all') builder = builder.eq('listing_status', query.status)
