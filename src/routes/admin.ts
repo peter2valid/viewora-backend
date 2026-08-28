@@ -1103,29 +1103,46 @@ export default async function (fastify: FastifyInstance) {
     }
   })
 
+  const PLAN_FIELDS = [
+    'name', 'price_monthly_kes', 'price_yearly_kes',
+    'max_active_properties', 'max_storage_bytes', 'max_upload_bytes', 'max_team_members',
+    'qr_download_enabled', 'qr_svg_enabled', 'embeds_enabled', 'advanced_embeds_enabled',
+    'lead_capture_enabled', 'advanced_analytics_enabled', 'branding_customization_enabled',
+  ] as const
+
+  function pickPlanFields(body: any) {
+    const out: Record<string, any> = {}
+    for (const key of PLAN_FIELDS) {
+      if (body[key] !== undefined) out[key] = body[key]
+    }
+    return out
+  }
+
   fastify.post('/plans', async (request, reply) => {
     try {
-      const body = request.body as any
+      const body = pickPlanFields(request.body as any)
       const { data, error } = await fastify.supabase.from('plans').insert(body).select().single()
       if (error) throw error
       await auditLog(fastify, request, 'create_plan', 'plan', data.id, body)
       return reply.code(201).send({ success: true, data })
     } catch (error: any) {
-      return reply.code(500).send({ statusMessage: 'Failed to create plan' })
+      fastify.log.error(error, 'Failed to create plan')
+      return reply.code(500).send({ statusMessage: error?.message || 'Failed to create plan' })
     }
   })
 
   fastify.patch('/plans/:id', async (request, reply) => {
     try {
       const { id } = request.params as any
-      const body = request.body as any
+      const body = pickPlanFields(request.body as any)
       const { data, error } = await fastify.supabase
         .from('plans').update({ ...body, updated_at: new Date().toISOString() }).eq('id', id).select().single()
       if (error) throw error
       await auditLog(fastify, request, 'update_plan', 'plan', id, body)
       return reply.send({ success: true, data })
     } catch (error: any) {
-      return reply.code(500).send({ statusMessage: 'Failed to update plan' })
+      fastify.log.error(error, 'Failed to update plan')
+      return reply.code(500).send({ statusMessage: error?.message || 'Failed to update plan' })
     }
   })
 
